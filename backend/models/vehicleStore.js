@@ -6,7 +6,7 @@
 // in the Expenses sheet with `vehicleId` set — this sheet only holds the
 // vehicle's own details, not its expense history.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, updateRowAt, deleteRowAt } from "../utils/firestoreDb.js";
 
 const SHEET_NAME = "Vehicles";
 const HEADERS = [

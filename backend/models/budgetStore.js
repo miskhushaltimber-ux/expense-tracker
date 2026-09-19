@@ -11,7 +11,7 @@
 // read time, so a budget can never drift out of sync with what was actually
 // spent.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRows, updateRowsAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRows, updateRowsAt } from "../utils/firestoreDb.js";
 
 const SHEET_NAME = "Budgets";
 const HEADERS = ["id", "userId", "master", "monthlyBudget", "yearlyBudget", "createdAt", "updatedAt"];

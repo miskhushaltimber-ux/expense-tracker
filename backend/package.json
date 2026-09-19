@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^9.2.0",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.11.0",
     "cors": "^2.8.5",

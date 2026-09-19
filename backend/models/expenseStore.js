@@ -12,7 +12,7 @@ import {
   updateRowsAt,
   deleteRowAt,
   deleteRowsAt,
-} from "../utils/sheetsDb.js";
+} from "../utils/firestoreDb.js";
 
 const SHEET_NAME = "Expenses";
 const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres", "odometer"];

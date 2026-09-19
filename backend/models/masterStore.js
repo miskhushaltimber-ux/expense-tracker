@@ -7,7 +7,7 @@
 // to rename, delete and add to. The constant in constants/categories.js
 // survives only as the seed for that first copy.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/firestoreDb.js";
 import { EXPENSE_MASTERS } from "../constants/categories.js";
 
 const SHEET_NAME = "Masters";

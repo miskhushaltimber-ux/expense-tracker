@@ -15,7 +15,8 @@ import masterRoutes from "./routes/masterRoutes.js";
 import labourRoutes from "./routes/labourRoutes.js";
 import labourSheetsRoutes from "./routes/labourSheetsRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
-import { isSheetsDbConfigured } from "./utils/sheetsDb.js";
+import { isFirestoreConfigured } from "./utils/firestoreClient.js";
+import { runMigration } from "./scripts/migrateSheetsToFirestore.js";
 import { ensureUsersSheet } from "./models/userStore.js";
 import { ensureExpensesSheet } from "./models/expenseStore.js";
 import { ensureVehiclesSheet } from "./models/vehicleStore.js";
@@ -91,7 +92,7 @@ app.use("/api/labour-sheets", labourSheetsRoutes);
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "Expense Tracker API is running...",
-    database: isSheetsDbConfigured() ? "google-sheets-connected" : "google-sheets-not-configured",
+    database: isFirestoreConfigured() ? "firestore-connected" : "firestore-not-configured",
   });
 });
 
@@ -109,9 +110,11 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 
-  // The database is a Google Sheet now (no MongoDB) — make sure its Users
-  // and Expenses tabs exist before anything tries to read/write them.
-  if (isSheetsDbConfigured()) {
+  // The database is Firestore now (previously Google Sheets, previously
+  // MongoDB) — make sure every collection is ready before anything tries to
+  // read/write it. Firestore creates collections implicitly, so this is
+  // mostly a config check rather than real setup work.
+  if (isFirestoreConfigured()) {
     try {
       await Promise.all([
         ensureUsersSheet(),
@@ -126,13 +129,21 @@ app.listen(PORT, async () => {
         ensurePaymentsSheet(),
         ensureLocationsSheet(),
       ]);
-      console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments tabs)");
+      console.log("✅ Firestore database ready (Users + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments + Locations)");
     } catch (error) {
-      console.error("❌ Couldn't prepare the Google Sheets database:", error.message);
+      console.error("❌ Couldn't prepare the Firestore database:", error.message);
+    }
+
+    // One-time, opt-in: set RUN_MIGRATION=true to copy every row out of the
+    // old Google Sheet into Firestore once, then remove that env var again.
+    // Safe to leave on by accident — each table is skipped once it already
+    // has data in Firestore, so this never duplicates rows.
+    if (process.env.RUN_MIGRATION === "true") {
+      await runMigration();
     }
   } else {
     console.error(
-      "❌ Google Sheets isn't configured yet — set GOOGLE_SERVICE_ACCOUNT_KEY and GOOGLE_SHEET_ID in backend/.env. Nothing can be saved until this is done. See backend/.env.example."
+      "❌ Firestore isn't configured yet — set GOOGLE_SERVICE_ACCOUNT_KEY (and FIRESTORE_DATABASE_ID, if your database isn't named \"(default)\") in backend/.env. Nothing can be saved until this is done. See backend/.env.example."
     );
   }
 });

@@ -17,7 +17,7 @@
 // All five entities in THIS file share the same generic CRUD shape (see
 // makeStore), which just needs each sheet's headers and a row->entity mapper.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, updateRowsAt, deleteRowAt, deleteRowsAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, updateRowsAt, deleteRowAt, deleteRowsAt } from "../utils/firestoreDb.js";
 
 const SHEETS = {
   mills: "Mills",

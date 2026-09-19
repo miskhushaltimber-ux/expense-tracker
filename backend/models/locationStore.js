@@ -11,7 +11,7 @@
 // their own rows, and from then on they're theirs to rename, add to and
 // remove.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/firestoreDb.js";
 
 const SHEET_NAME = "Locations";
 const HEADERS = ["id", "userId", "name", "createdAt", "updatedAt"];

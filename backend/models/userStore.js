@@ -2,7 +2,7 @@
 // "Users" tab of the app's Google Sheet database (see utils/sheetsDb.js).
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, findRowById, updateRowAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, findRowById, updateRowAt } from "../utils/firestoreDb.js";
 
 const SHEET_NAME = "Users";
 const HEADERS = ["id", "name", "email", "passwordHash", "createdAt"];
