@@ -630,7 +630,9 @@ const Vehicles = () => {
   const renderExpenseRow = (row) => (
     <tr
       key={row._id}
-      className={selectedIds.has(row._id) ? "bg-red-50/60 dark:bg-red-900/20" : "hover:bg-gray-50 dark:hover:bg-gray-900"}
+      className={`divide-x divide-gray-200 dark:divide-gray-700 ${
+        selectedIds.has(row._id) ? "bg-red-50/60 dark:bg-red-900/20" : "hover:bg-gray-50 dark:hover:bg-gray-900"
+      }`}
     >
       <td className="px-3 py-2">
         <input
@@ -1163,7 +1165,7 @@ const Vehicles = () => {
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                   <thead className="bg-gray-50 dark:bg-gray-900">
-                    <tr>
+                    <tr className="divide-x divide-gray-200 dark:divide-gray-700">
                       <th className="px-3 py-3 w-10">
                         <input
                           type="checkbox"
@@ -1190,7 +1192,7 @@ const Vehicles = () => {
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {/* Draft row — always present, regardless of search/grouping */}
-                    <tr ref={expenseDraftRowRef} onBlur={handleExpenseDraftRowBlur} className="bg-blue-50/40 dark:bg-blue-900/20">
+                    <tr ref={expenseDraftRowRef} onBlur={handleExpenseDraftRowBlur} className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
                       <td className="px-3 py-2"></td>
                       <td className="px-2 py-2">
                         <input

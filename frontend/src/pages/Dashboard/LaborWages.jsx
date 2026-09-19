@@ -253,7 +253,7 @@ const LedgerSheet = ({
       )}
       <table className="w-full border-collapse text-sm">
       <thead>
-        <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
+        <tr className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
           {onBulkDelete && (
             <th className="px-3 py-2 w-8">
               <input
@@ -286,7 +286,7 @@ const LedgerSheet = ({
         </tr>
       </thead>
       <tbody>
-        <tr ref={rowRef} onBlur={handleRowBlur} className="border-b border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
+        <tr ref={rowRef} onBlur={handleRowBlur} className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
           {onBulkDelete && <td className="px-3 py-2"></td>}
           {isRange ? (
             <>
@@ -371,11 +371,11 @@ const LedgerSheet = ({
           return (
             <tr
               key={row._id}
-              className={
+              className={`border-b divide-x divide-gray-200 dark:divide-gray-700 ${
                 onBulkDelete && selectedIds.has(row._id)
-                  ? "border-b border-gray-100 dark:border-gray-800 bg-red-50/60 dark:bg-red-900/20"
-                  : "border-b border-gray-100 dark:border-gray-800"
-              }
+                  ? "border-gray-100 dark:border-gray-800 bg-red-50/60 dark:bg-red-900/20"
+                  : "border-gray-100 dark:border-gray-800"
+              }`}
             >
               {onBulkDelete && (
                 <td className="px-3 py-2">

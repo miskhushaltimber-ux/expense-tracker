@@ -7,6 +7,7 @@ import {
   bulkAddExpenses,
   bulkDeleteExpenses,
 } from "/src/api/expenses";
+import { bulkAddPayments } from "/src/api/labour";
 import { fetchMasterCatalog } from "/src/api/masters";
 import { previewImportSheet } from "/src/api/imports";
 import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
@@ -556,11 +557,11 @@ const Expenses = () => {
   const renderRow = (row) => (
     <tr
       key={row._id}
-      className={
+      className={`divide-x divide-gray-200 dark:divide-gray-700 ${
         selectedIds.has(row._id)
           ? "bg-red-50/60 dark:bg-red-900/20"
           : "hover:bg-gray-50 dark:hover:bg-gray-900"
-      }
+      }`}
     >
       <td className="px-3 py-2">
         <input
@@ -663,7 +664,7 @@ const Expenses = () => {
   );
 
   return (
-    <div className="p-4 sm:p-6 lg:px-12 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 min-h-screen">
+    <div className="p-4 sm:p-6 lg:px-12">
       <ToastContainer />
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
@@ -857,7 +858,7 @@ const Expenses = () => {
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                 <thead className="bg-gray-50 dark:bg-gray-900">
-                  <tr>
+                  <tr className="divide-x divide-gray-200 dark:divide-gray-700">
                     <th className="px-3 py-3 w-10">
                       <input
                         type="checkbox"
@@ -884,7 +885,7 @@ const Expenses = () => {
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {/* Draft row — always present at the top for fast entry, regardless of search/grouping */}
-                  <tr className="bg-blue-50/40 dark:bg-blue-900/20">
+                  <tr className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
                     <td className="px-3 py-2"></td>
                     <td className="px-2 py-2">
                       <input
@@ -1134,16 +1135,64 @@ const ImportModal = ({ onClose, onImported, existingRows = [] }) => {
     }));
   };
 
+  // Lets the user correct the server's guess before anything is saved — e.g.
+  // a "Vehicle"/"Contractor" column value that didn't match anything on
+  // file, or a match it got wrong. `value` is "expense", "vehicle:<id>" or
+  // "payment:<id>".
+  const updateRoute = (rowNumber, value) => {
+    setPreview((p) => ({
+      ...p,
+      rows: p.rows.map((r) => {
+        if (r._rowNumber !== rowNumber) return r;
+        if (value === "expense") {
+          return { ...r, route: "expense", vehicleId: undefined, vehicleName: undefined, contractorId: undefined, contractorName: undefined };
+        }
+        const [kind, id] = value.split(":");
+        if (kind === "vehicle") {
+          const v = (p.vehicleOptions || []).find((x) => x.id === id);
+          return { ...r, route: "vehicle", vehicleId: id, vehicleName: v?.name, contractorId: undefined, contractorName: undefined };
+        }
+        const c = (p.contractorOptions || []).find((x) => x.id === id);
+        return { ...r, route: "payment", contractorId: id, contractorName: c?.name, vehicleId: undefined, vehicleName: undefined };
+      }),
+    }));
+  };
+
+  // A single import can now end up split across two destinations: rows
+  // routed to a vehicle are still plain expenses (just with vehicleId set,
+  // same as picking a vehicle on the Vehicles page) so they go through the
+  // usual bulk-expenses endpoint; rows routed to a labor payment go through
+  // the Labor Wages payments endpoint instead, since that's a different
+  // table entirely.
   const handleCommit = async () => {
     const toImport = preview.rows.filter((r) => r.include);
     if (toImport.length === 0) {
       notifyError("Nothing selected to import");
       return;
     }
+    const expenseRows = toImport.filter((r) => r.route !== "payment");
+    const paymentRows = toImport.filter((r) => r.route === "payment");
+
     try {
       setCommitting(true);
-      const result = await bulkAddExpenses(toImport);
-      notifySuccess(`Imported ${result.imported} row${result.imported === 1 ? "" : "s"}`);
+      let importedExpenses = 0;
+      let importedPayments = 0;
+
+      if (expenseRows.length) {
+        const result = await bulkAddExpenses(expenseRows);
+        importedExpenses = result.imported;
+      }
+      if (paymentRows.length) {
+        const result = await bulkAddPayments(
+          paymentRows.map((r) => ({ contractorId: r.contractorId, date: r.date, label: r.expense, amount: r.amount }))
+        );
+        importedPayments = result.added;
+      }
+
+      const parts = [];
+      if (importedExpenses) parts.push(`${importedExpenses} expense${importedExpenses === 1 ? "" : "s"}`);
+      if (importedPayments) parts.push(`${importedPayments} labor payment${importedPayments === 1 ? "" : "s"}`);
+      notifySuccess(parts.length ? `Imported ${parts.join(" and ")}` : "Nothing was imported");
       onImported();
     } catch (err) {
       notifyError(err.message || "Failed to save imported rows");
@@ -1238,6 +1287,9 @@ const ImportModal = ({ onClose, onImported, existingRows = [] }) => {
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expense</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Amount</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Master</th>
+                    {(preview.vehicleOptions?.length > 0 || preview.contractorOptions?.length > 0) && (
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Destination</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -1257,6 +1309,27 @@ const ImportModal = ({ onClose, onImported, existingRows = [] }) => {
                           </span>
                         )}
                       </td>
+                      {(preview.vehicleOptions?.length > 0 || preview.contractorOptions?.length > 0) && (
+                        <td className="px-3 py-2">
+                          <select
+                            value={r.route === "vehicle" ? `vehicle:${r.vehicleId}` : r.route === "payment" ? `payment:${r.contractorId}` : "expense"}
+                            onChange={(e) => updateRoute(r._rowNumber, e.target.value)}
+                            className="text-xs border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded px-1.5 py-1 max-w-[150px]"
+                          >
+                            <option value="expense">Plain expense</option>
+                            {(preview.vehicleOptions || []).map((v) => (
+                              <option key={v.id} value={`vehicle:${v.id}`}>
+                                Vehicle: {v.name}
+                              </option>
+                            ))}
+                            {(preview.contractorOptions || []).map((c) => (
+                              <option key={c.id} value={`payment:${c.id}`}>
+                                Payment: {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
