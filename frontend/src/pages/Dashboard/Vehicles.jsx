@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchVehicles } from "/src/api/vehicles";
 import { fetchExpenses, addExpense, updateExpense, deleteExpense, bulkAddExpenses, bulkDeleteExpenses } from "/src/api/expenses";
-import { fetchMasters } from "/src/api/meta";
+import { fetchMasterCatalog } from "/src/api/masters";
 import { previewImportSheet } from "/src/api/imports";
 import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
@@ -103,6 +103,14 @@ const Vehicles = () => {
   const [vehicles, setVehicles] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [masters, setMasters] = useState(DEFAULT_EXPENSE_MASTERS);
+  // 19 Sep, per Rishi: the master list here was mismatched against the
+  // Expenses page — this page was reading /api/meta/masters (a fixed,
+  // never-changes constant) instead of this user's own per-user masters
+  // (rename/add/delete from the Expenses or Manage Data page), so a master
+  // renamed or added there never showed up here. masterCatalog is the same
+  // {id, name} shape Expenses.jsx keeps, needed for MasterAutocomplete's
+  // inline rename/add/delete to work here too, not just show a stale list.
+  const [masterCatalog, setMasterCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("sheet");
 
@@ -194,16 +202,23 @@ const Vehicles = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [vehicleData, expenseData, masterData] = await Promise.all([fetchVehicles(), fetchExpenses(), fetchMasters()]);
+      const [vehicleData, expenseData, masterData] = await Promise.all([fetchVehicles(), fetchExpenses(), fetchMasterCatalog()]);
       setVehicles(Array.isArray(vehicleData) ? vehicleData : []);
       setExpenses(Array.isArray(expenseData) ? expenseData : []);
-      setMasters(masterData?.length ? masterData : DEFAULT_EXPENSE_MASTERS);
+      setMasterCatalog(Array.isArray(masterData) ? masterData : []);
+      setMasters(masterData?.length ? masterData.map((m) => m.name) : DEFAULT_EXPENSE_MASTERS);
     } catch (err) {
       notifyError("Failed to load vehicles");
     } finally {
       setLoading(false);
     }
   };
+
+  // Called after a master is added, renamed or deleted from the dropdown
+  // here — same reasoning as Expenses.jsx's reloadAfterMasterChange: a
+  // rename rewrites the Master column on every expense that used it, so the
+  // rows need to come back too, not just the name list.
+  const reloadAfterMasterChange = () => loadData();
 
   useEffect(() => {
     loadData();
@@ -687,6 +702,8 @@ const Vehicles = () => {
           inputRef={setExpenseCellRef(row._id, "master")}
           value={row.master}
           masters={masters}
+          catalog={masterCatalog}
+          onCatalogChange={reloadAfterMasterChange}
           onChange={(value) => updateExpenseField(row._id, "master", value)}
           onBlur={() => saveExpenseRow(row._id)}
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "master", { isDraft: false })}
@@ -768,7 +785,7 @@ const Vehicles = () => {
   );
 
   return (
-    <div className="p-4 sm:p-6 lg:px-12 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 min-h-screen">
+    <div className="p-4 sm:p-6 lg:px-12">
       <ToastContainer />
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
@@ -1232,6 +1249,8 @@ const Vehicles = () => {
                           inputRef={setExpenseCellRef("draft", "master")}
                           value={expenseDraft.master}
                           masters={masters}
+                          catalog={masterCatalog}
+                          onCatalogChange={reloadAfterMasterChange}
                           onChange={(value) => setExpenseDraftField("master", value)}
                           onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "master", { isDraft: true })}
                           placeholder="E.g., Fuel & Diesel"
