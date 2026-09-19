@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* Tailwind v4 defaults dark: to the OS setting. We want an in-app toggle
+   instead, so dark: keys off a .dark class that ThemeContext puts on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Base page colour, so the area behind the app doesn't flash white when
+   switching themes or while React mounts. */
+html {
+  background-color: #f9f9f7;
+}
+html.dark {
+  background-color: #0d0d0d;
+  color-scheme: dark;
+}
+
+/* Native form controls (date pickers especially) render their own chrome —
+   this tells the browser to draw them dark instead of a white box. */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color-scheme: dark;
+}
