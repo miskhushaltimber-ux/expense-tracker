@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Menu, PieChart, Database, FolderOpen } from "lucide-react";
+import { Menu, PieChart, Database, FolderOpen, Settings } from "lucide-react";
 import { APP_NAME } from "../constants/brand";
 
 // The top-right corner sat empty since this navbar was first built — this
@@ -55,7 +55,7 @@ const Navbar = ({ onMenuClick }) => {
             aria-expanded={menuOpen}
             title="More"
           >
-            <Menu size={22} />
+            <Settings size={22} />
           </button>
 
           {menuOpen && (

@@ -22,7 +22,7 @@ import { useTheme } from "/src/context/ThemeContext";
 import { APP_NAME, APP_TAGLINE } from "/src/constants/brand";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
-import { FiFilter, FiXCircle, FiX, FiAlertTriangle } from "react-icons/fi";
+import { FiFilter, FiXCircle, FiX, FiAlertTriangle, FiChevronUp, FiChevronDown } from "react-icons/fi";
 
 // Dashboard tabs (18 Sep, per Rishi's correction: "i said pages in inside the
 // dashboard only just like what we did in labor page with work log, payments
@@ -81,6 +81,96 @@ const Card = ({ children, className = "" }) => (
   <div className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm ${className}`}>{children}</div>
 );
 
+// Per-chart period options (item i, take 2 — a global filter panel already
+// exists above; these are separate, chart-local windows so e.g. the trend
+// line can show 12 months while the pie stays on "this month").
+const TREND_PERIOD_OPTIONS = [
+  { value: "3m", label: "3 months" },
+  { value: "6m", label: "6 months" },
+  { value: "12m", label: "12 months" },
+];
+const BREAKDOWN_PERIOD_OPTIONS = [
+  { value: "all", label: "All time" },
+  { value: "month", label: "This month" },
+  { value: "3m", label: "Last 3 months" },
+  { value: "year", label: "This year" },
+];
+const TREND_MONTHS = { "3m": 3, "6m": 6, "12m": 12 };
+
+// "all"/"month"/"3m"/"year" — a chart-local window, independent of the global
+// from/to filter above it. Absent or unrecognised period reads as "all".
+const withinPeriod = (dateStr, period) => {
+  if (!period || period === "all") return true;
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return false;
+  const now = new Date();
+  if (period === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  if (period === "3m") return d >= new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+  if (period === "year") return d.getFullYear() === now.getFullYear();
+  return true;
+};
+
+// Every chart card: a header (title + optional period switch + collapse
+// toggle) over a body that squeezes shut instead of unmounting. The
+// grid-rows-[0fr → 1fr] trick animates to the content's real height with no
+// JS measurement and no jank — a hardcoded max-height would either clip a
+// tall chart or leave a gap under a short one.
+const ChartCard = ({
+  title,
+  subtitle,
+  INK,
+  periodOptions,
+  period,
+  onPeriodChange,
+  collapsed,
+  onToggleCollapse,
+  className = "",
+  children,
+}) => (
+  <Card className={className}>
+    <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 className="font-semibold truncate" style={{ color: INK.primary }}>
+          {title}
+        </h2>
+        {subtitle && (
+          <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {periodOptions && !collapsed && (
+          <select
+            value={period}
+            onChange={(e) => onPeriodChange(e.target.value)}
+            className="text-xs border border-gray-300 dark:border-gray-600 dark:bg-gray-900 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-red-400"
+            style={{ color: INK.secondary }}
+          >
+            {periodOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <button
+          onClick={onToggleCollapse}
+          title={collapsed ? "Expand this chart" : "Collapse this chart"}
+          aria-label={collapsed ? "Expand this chart" : "Collapse this chart"}
+          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900"
+        >
+          {collapsed ? <FiChevronDown size={16} /> : <FiChevronUp size={16} />}
+        </button>
+      </div>
+    </div>
+    <div className={`grid transition-all duration-300 ease-in-out ${collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"}`}>
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  </Card>
+);
+
 const Home = () => {
   const { user } = useAuth();
   const { theme } = useTheme();
@@ -106,6 +196,13 @@ const Home = () => {
 
   // --- Drill-down drawer (sir's item ii) ---
   const [drillMaster, setDrillMaster] = useState(null);
+
+  // --- Per-chart period + collapse controls ---
+  const [trendPeriod, setTrendPeriod] = useState("6m");
+  const [masterPeriod, setMasterPeriod] = useState("all");
+  const [vehiclePeriod, setVehiclePeriod] = useState("all");
+  const [collapsedCharts, setCollapsedCharts] = useState({});
+  const toggleChartCollapsed = (key) => setCollapsedCharts((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const activeFilterCount =
     [filterExpense, filterFrom, filterTo].filter((v) => v !== "").length + (filterMasters.length > 0 ? 1 : 0);
@@ -227,9 +324,10 @@ const Home = () => {
   // Derived client-side rather than from the trend endpoint, so the filters
   // genuinely apply to every chart on the page instead of just some of them.
   const trend = useMemo(() => {
+    const months = TREND_MONTHS[trendPeriod] || 6;
     const now = new Date();
     const buckets = [];
-    for (let i = 5; i >= 0; i--) {
+    for (let i = months - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       buckets.push({
         key: monthKey(d),
@@ -244,7 +342,7 @@ const Home = () => {
       if (bucket) bucket.total += Number(e.amount) || 0;
     }
     return buckets;
-  }, [filtered]);
+  }, [filtered, trendPeriod]);
 
   const thisMonth = trend[trend.length - 1];
   const lastMonth = trend[trend.length - 2];
@@ -262,16 +360,28 @@ const Home = () => {
   const drillIntoMaster = filterMasters.length === 1 ? filterMasters[0] : null;
   const breakdownKey = drillIntoMaster ? "expense" : "master";
 
+  // Chart-local window for the two master-breakdown cards only — the drawer
+  // and every other card keep using the plain `filtered` set above, so
+  // narrowing this to "This month" never makes a click-through show 0 rows.
+  const masterFiltered = useMemo(
+    () => filtered.filter((e) => withinPeriod(e.date, masterPeriod)),
+    [filtered, masterPeriod]
+  );
+  const masterFilteredTotal = useMemo(
+    () => masterFiltered.reduce((s, e) => s + (Number(e.amount) || 0), 0),
+    [masterFiltered]
+  );
+
   const masterTotals = useMemo(() => {
     const totals = {};
-    for (const e of filtered) {
+    for (const e of masterFiltered) {
       const key = (breakdownKey === "expense" ? e.expense : e.master) || "Unlabelled";
       totals[key] = (totals[key] || 0) + (Number(e.amount) || 0);
     }
     return Object.entries(totals)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [filtered, breakdownKey]);
+  }, [masterFiltered, breakdownKey]);
 
   // Expense slices only exist while drilled into a single master, so there is
   // no stable entity to pin a colour to — rank order is fine here, and the
@@ -325,15 +435,21 @@ const Home = () => {
     const totalSpend = vehicleExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     return { totalSpend, vehicleCount: vehicles.length, entryCount: vehicleExpenses.length };
   }, [vehicles, vehicleExpenses]);
+  // Chart-local period for "Spend by vehicle" only — the three stat tiles
+  // above it stay on the vehicle tab's full, all-time totals.
+  const vehicleExpensesForChart = useMemo(
+    () => vehicleExpenses.filter((e) => withinPeriod(e.date, vehiclePeriod)),
+    [vehicleExpenses, vehiclePeriod]
+  );
   const vehicleBySpend = useMemo(() => {
     return vehicles
       .map((v) => ({
         name: v.name,
-        spend: vehicleExpenses.filter((e) => e.vehicleId === v._id).reduce((s, e) => s + (Number(e.amount) || 0), 0),
+        spend: vehicleExpensesForChart.filter((e) => e.vehicleId === v._id).reduce((s, e) => s + (Number(e.amount) || 0), 0),
       }))
       .filter((v) => v.spend > 0)
       .sort((a, b) => b.spend - a.spend);
-  }, [vehicles, vehicleExpenses]);
+  }, [vehicles, vehicleExpensesForChart]);
 
   // --- Labor Wages tab ------------------------------------------------------
   const laborTotals = useMemo(() => {
@@ -550,15 +666,17 @@ const Home = () => {
       </div>
 
       {/* Monthly trend */}
-      <Card className="mb-6">
-        <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="font-semibold" style={{ color: INK.primary }}>
-            Monthly Spend
-          </h2>
-          <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-            Last 6 months
-          </p>
-        </div>
+      <ChartCard
+        className="mb-6"
+        title="Monthly Spend"
+        subtitle={`Last ${TREND_MONTHS[trendPeriod] || 6} months`}
+        INK={INK}
+        periodOptions={TREND_PERIOD_OPTIONS}
+        period={trendPeriod}
+        onPeriodChange={setTrendPeriod}
+        collapsed={!!collapsedCharts.trend}
+        onToggleCollapse={() => toggleChartCollapsed("trend")}
+      >
         <div className="p-4 h-64">
           {trend.some((m) => m.total) ? (
             <ResponsiveContainer width="100%" height="100%">
@@ -595,19 +713,20 @@ const Home = () => {
             </div>
           )}
         </div>
-      </Card>
+      </ChartCard>
 
       {/* Master breakdown — both charts click through to the drawer */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-            <h2 className="font-semibold" style={{ color: INK.primary }}>
-              {drillIntoMaster ? `Spend within ${drillIntoMaster}` : "Spend by Master"}
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              {drillIntoMaster ? "Split by individual expense" : "Click any slice to see its entries"}
-            </p>
-          </div>
+        <ChartCard
+          title={drillIntoMaster ? `Spend within ${drillIntoMaster}` : "Spend by Master"}
+          subtitle={drillIntoMaster ? "Split by individual expense" : "Click any slice to see its entries"}
+          INK={INK}
+          periodOptions={BREAKDOWN_PERIOD_OPTIONS}
+          period={masterPeriod}
+          onPeriodChange={setMasterPeriod}
+          collapsed={!!collapsedCharts.masterPie}
+          onToggleCollapse={() => toggleChartCollapsed("masterPie")}
+        >
           <div className="p-4 h-80">
             {chartMasterData.length > 0 ? (
               <div className="relative w-full h-full">
@@ -648,7 +767,7 @@ const Home = () => {
                     Total
                   </span>
                   <span className="text-lg font-semibold" style={{ color: INK.primary }}>
-                    {formatCurrency(total)}
+                    {formatCurrency(masterFilteredTotal)}
                   </span>
                 </div>
               </div>
@@ -658,17 +777,18 @@ const Home = () => {
               </div>
             )}
           </div>
-        </Card>
+        </ChartCard>
 
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-            <h2 className="font-semibold" style={{ color: INK.primary }}>
-              {drillIntoMaster ? "Biggest Entries" : "Top Masters"}
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              {drillIntoMaster ? `Within ${drillIntoMaster}` : "Click any bar to see its entries"}
-            </p>
-          </div>
+        <ChartCard
+          title={drillIntoMaster ? "Biggest Entries" : "Top Masters"}
+          subtitle={drillIntoMaster ? `Within ${drillIntoMaster}` : "Click any bar to see its entries"}
+          INK={INK}
+          periodOptions={BREAKDOWN_PERIOD_OPTIONS}
+          period={masterPeriod}
+          onPeriodChange={setMasterPeriod}
+          collapsed={!!collapsedCharts.masterBar}
+          onToggleCollapse={() => toggleChartCollapsed("masterBar")}
+        >
           <div className="p-4 h-80">
             {chartMasterData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -720,7 +840,7 @@ const Home = () => {
               </div>
             )}
           </div>
-        </Card>
+        </ChartCard>
       </div>
 
       {/* Recent entries */}
@@ -855,8 +975,16 @@ const Home = () => {
             </div>
 
             {vehicleBySpend.length > 0 && (
-              <Card className="p-4 h-96">
-                <p className="text-sm font-semibold px-1 pb-2" style={{ color: INK.primary }}>Spend by vehicle</p>
+              <ChartCard
+                title="Spend by vehicle"
+                INK={INK}
+                periodOptions={BREAKDOWN_PERIOD_OPTIONS}
+                period={vehiclePeriod}
+                onPeriodChange={setVehiclePeriod}
+                collapsed={!!collapsedCharts.vehicle}
+                onToggleCollapse={() => toggleChartCollapsed("vehicle")}
+              >
+                <div className="p-4 h-96">
                 <ResponsiveContainer width="100%" height="90%">
                   <BarChart data={vehicleBySpend} margin={{ top: 8, right: 8, left: 0, bottom: 8 }} barGap={2}>
                     <CartesianGrid stroke={INK.grid} vertical={false} />
@@ -873,7 +1001,8 @@ const Home = () => {
                     <Bar dataKey="spend" name="Spend" fill={seriesColors[0]} radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
-              </Card>
+                </div>
+              </ChartCard>
             )}
           </>
         )
@@ -909,8 +1038,14 @@ const Home = () => {
             </div>
 
             {laborByContractor.length > 0 && (
-              <Card className="p-4 h-96">
-                <p className="text-sm font-semibold px-1 pb-2" style={{ color: INK.primary }}>Earned vs Paid, by contractor</p>
+              <ChartCard
+                title="Earned vs Paid, by contractor"
+                subtitle="All time — Work Log entries don't carry a real date to filter by"
+                INK={INK}
+                collapsed={!!collapsedCharts.labor}
+                onToggleCollapse={() => toggleChartCollapsed("labor")}
+              >
+                <div className="p-4 h-96">
                 <ResponsiveContainer width="100%" height="90%">
                   <BarChart data={laborByContractor} margin={{ top: 8, right: 8, left: 0, bottom: 8 }} barGap={2}>
                     <CartesianGrid stroke={INK.grid} vertical={false} />
@@ -928,7 +1063,8 @@ const Home = () => {
                     <Bar dataKey="paid" name="Paid" fill={seriesColors[2]} radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
-              </Card>
+                </div>
+              </ChartCard>
             )}
           </>
         )

@@ -157,7 +157,7 @@ const Documents = () => {
   }
 
   return (
-    <div className="p-4 sm:p-6 lg:px-12 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 min-h-screen">
+    <div className="p-4 sm:p-6 lg:px-12">
       <div className="max-w-5xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-gray-100 mb-1">Documents</h1>

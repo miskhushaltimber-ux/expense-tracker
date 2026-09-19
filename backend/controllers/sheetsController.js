@@ -1,6 +1,7 @@
 import { listExpensesByUser } from "../models/expenseStore.js";
 import { isGoogleSheetsConfigured, exportExpensesToSheet, readSheetValues } from "../utils/googleSheets.js";
 import { parseSheetValuesToPreview } from "../utils/importParser.js";
+import { resolveImportDestinations } from "../utils/importDestinations.js";
 import { listVehiclesByUser } from "../models/vehicleStore.js";
 import { buildExpensesWorkbook, expensesFileName } from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendExpenseSheetEmail } from "../utils/mailer.js";
@@ -97,7 +98,18 @@ export const previewFromSheet = async (req, res) => {
   try {
     const values = await readSheetValues(sheetUrl);
     const { rows, warnings, columnMapping } = parseSheetValuesToPreview(values);
-    res.json({ rows, warnings, columnMapping, totalRows: rows.length });
+    const { rows: resolvedRows, warnings: destWarnings, vehicleOptions, contractorOptions } = await resolveImportDestinations(
+      rows,
+      req.user.id
+    );
+    res.json({
+      rows: resolvedRows,
+      warnings: [...warnings, ...destWarnings],
+      columnMapping,
+      totalRows: resolvedRows.length,
+      vehicleOptions,
+      contractorOptions,
+    });
   } catch (error) {
     console.error("Error importing from Google Sheet:", error.message);
     res.status(400).json({ message: error.message });

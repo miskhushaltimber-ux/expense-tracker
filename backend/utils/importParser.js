@@ -33,6 +33,13 @@ const HEADER_MATCHERS = {
   amount: ["amount", "amt", "value", "price", "total", "inr", "rupees"],
   expense: ["expense", "description", "desc", "particulars", "particular", "details", "detail", "title", "narration", "remark", "remarks", "item"],
   master: ["master", "category", "categories", "head", "expensehead"],
+  // Optional columns, only present on a sheet that mixes vehicle expenses
+  // and/or labor payments in with regular expenses. See resolveDestinations
+  // in backend/utils/importDestinations.js for what happens with these —
+  // this file only detects and extracts the raw text, it has no database
+  // access to match names against actual saved vehicles/contractors.
+  vehicle: ["vehicle", "vehiclename", "vehicleno", "vehiclenumber", "numberplate", "truckno", "truck"],
+  contractor: ["contractor", "contractorname", "labourcontractor", "labourername", "labourer", "labouername"],
 };
 
 const detectColumnsByHeader = (headers) => {
@@ -234,12 +241,20 @@ export const mapRowsToPreview = (rawRows, headers) => {
     const matchedMaster = EXPENSE_MASTERS.find((m) => m.toLowerCase() === rawMaster.toLowerCase());
     const master = matchedMaster || rawMaster || guessMaster(expenseText);
 
+    // Raw, unresolved text only — matching these against the user's actual
+    // saved vehicles/contractors needs database access this file doesn't
+    // have. See resolveDestinations in importDestinations.js.
+    const vehicleText = mapping.vehicle ? String(raw[mapping.vehicle] || "").trim() : "";
+    const contractorText = mapping.contractor ? String(raw[mapping.contractor] || "").trim() : "";
+
     return {
       _rowNumber: index + 2, // +2: 1 for header row, 1 for 0-index -> 1-index
       expense: expenseText || `Imported row ${index + 1}`,
       amount,
       date: date || new Date().toISOString().split("T")[0],
       master,
+      vehicleText,
+      contractorText,
       include: amount !== null, // auto-uncheck rows we couldn't even get an amount for
     };
   });

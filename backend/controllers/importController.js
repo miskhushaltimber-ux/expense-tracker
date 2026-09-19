@@ -1,8 +1,10 @@
 import { parseSheetToPreview } from "../utils/importParser.js";
 import { parseWorkLogSheetToPreview, parsePaymentSheetToPreview } from "../utils/labourImportParser.js";
+import { resolveImportDestinations } from "../utils/importDestinations.js";
 
 // Upload a sheet, get back a preview (nothing is saved yet — committing
-// happens via POST /api/expenses/bulk once the user has reviewed/edited
+// happens via POST /api/expenses/bulk, or POST /api/labour/payments/bulk for
+// rows routed to a contractor payment, once the user has reviewed/edited
 // the rows in the UI).
 export const previewImport = async (req, res) => {
   if (!req.file) {
@@ -11,7 +13,18 @@ export const previewImport = async (req, res) => {
 
   try {
     const { rows, warnings, columnMapping } = parseSheetToPreview(req.file.buffer, req.file.originalname);
-    res.json({ rows, warnings, columnMapping, totalRows: rows.length });
+    const { rows: resolvedRows, warnings: destWarnings, vehicleOptions, contractorOptions } = await resolveImportDestinations(
+      rows,
+      req.user.id
+    );
+    res.json({
+      rows: resolvedRows,
+      warnings: [...warnings, ...destWarnings],
+      columnMapping,
+      totalRows: resolvedRows.length,
+      vehicleOptions,
+      contractorOptions,
+    });
   } catch (error) {
     console.error("Error parsing import sheet:", error);
     res.status(400).json({ message: "Couldn't read that file. Make sure it's a valid .csv, .xls or .xlsx file." });
