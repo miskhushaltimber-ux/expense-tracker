@@ -7,6 +7,14 @@ import {
   bulkCreateExpenses,
 } from "../models/expenseStore.js";
 import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
+import { logAction } from "../utils/auditLog.js";
+
+// 19 Sep, multi-user accounts: every list/create/update/delete below is now
+// scoped by req.user.companyId (the shared account), not req.user.id (the
+// individual login) — so two logins on the same team see and edit the same
+// data. req.user.id is still used, separately, to say WHO did it in the
+// audit log. See status.md's Fifteenth update.
+const actorFields = (req) => ({ actorId: req.user.id, actorName: req.user.name, actorRole: req.user.role });
 
 // Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
@@ -18,7 +26,7 @@ export const addExpense = async (req, res) => {
 
   try {
     const doc = await createExpense({
-      userId: req.user.id,
+      userId: req.user.companyId,
       date: date || new Date(),
       expense,
       amount,
@@ -28,6 +36,13 @@ export const addExpense = async (req, res) => {
       litres,
       odometer,
     });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "created",
+      entity: "expense",
+      entityLabel: `${doc.expense} — ₹${doc.amount}`,
+    });
     res.status(201).json(doc);
   } catch (error) {
     console.error("Error adding expense:", error);
@@ -35,10 +50,10 @@ export const addExpense = async (req, res) => {
   }
 };
 
-// Get All Expenses (for the logged-in user), most recent first
+// Get All Expenses (for the whole company), most recent first
 export const getExpenses = async (req, res) => {
   try {
-    const expenses = await listExpensesByUser(req.user.id);
+    const expenses = await listExpensesByUser(req.user.companyId);
     res.json(expenses);
   } catch (error) {
     console.error("Error fetching expenses:", error);
@@ -49,7 +64,7 @@ export const getExpenses = async (req, res) => {
 // Master-wise totals, for the dashboard's breakdown chart
 export const getExpenseSummary = async (req, res) => {
   try {
-    const expenses = await listExpensesByUser(req.user.id);
+    const expenses = await listExpensesByUser(req.user.companyId);
     const totals = {};
     for (const e of expenses) {
       totals[e.master] = (totals[e.master] || 0) + e.amount;
@@ -65,7 +80,7 @@ export const getExpenseSummary = async (req, res) => {
 export const getMonthlyTrend = async (req, res) => {
   const months = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 6));
   try {
-    const expenses = await listExpensesByUser(req.user.id);
+    const expenses = await listExpensesByUser(req.user.companyId);
     const now = new Date();
     const buckets = [];
     for (let i = months - 1; i >= 0; i--) {
@@ -106,14 +121,21 @@ export const updateExpense = async (req, res) => {
     // FormData sends booleans as strings, hence the "true" comparison.
     const isRemovingBill = removeBill === "true" || removeBill === true;
     if (req.file || isRemovingBill) {
-      const existing = (await listExpensesByUser(req.user.id)).find((e) => e._id === req.params.id);
+      const existing = (await listExpensesByUser(req.user.companyId)).find((e) => e._id === req.params.id);
       if (existing?.billFile) await deleteStoredFile(existing.billFile);
       updates.billFile = req.file ? await storeFile(req.file) : "";
     }
 
-    const { expense: updated, error } = await updateExpenseById(req.params.id, req.user.id, updates);
+    const { expense: updated, error } = await updateExpenseById(req.params.id, req.user.companyId, updates);
     if (error === "not_found") return res.status(404).json({ message: "Expense not found" });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to update this expense" });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "updated",
+      entity: "expense",
+      entityLabel: `${updated.expense} — ₹${updated.amount}`,
+    });
     res.json(updated);
   } catch (error) {
     console.error("Error updating expense:", error);
@@ -124,12 +146,19 @@ export const updateExpense = async (req, res) => {
 // Delete Expense
 export const deleteExpense = async (req, res) => {
   try {
-    const { expense: deleted, error } = await deleteExpenseById(req.params.id, req.user.id);
+    const { expense: deleted, error } = await deleteExpenseById(req.params.id, req.user.companyId);
     if (error === "not_found") return res.status(404).json({ message: "Expense not found" });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to delete this expense" });
 
     if (deleted?.billFile) await deleteStoredFile(deleted.billFile);
 
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "deleted",
+      entity: "expense",
+      entityLabel: `${deleted.expense} — ₹${deleted.amount}`,
+    });
     res.json({ message: "Expense deleted successfully" });
   } catch (error) {
     console.error("Error deleting expense:", error);
@@ -139,8 +168,9 @@ export const deleteExpense = async (req, res) => {
 
 
 // Bulk delete — one request for a whole selection, rather than one request per
-// row. See deleteRowsAt in utils/sheetsDb.js for why this is not just a
-// convenience: row-at-a-time deletion exhausts the Google Sheets write quota.
+// row. See deleteRowsAt in utils/firestoreDb.js for why this is not just a
+// convenience: row-at-a-time deletion used to exhaust the old Google Sheets
+// write quota. Owner-only — see routes/expenseRoutes.js.
 export const bulkDeleteExpenses = async (req, res) => {
   const { ids } = req.body;
 
@@ -155,7 +185,7 @@ export const bulkDeleteExpenses = async (req, res) => {
   }
 
   try {
-    const { deleted, notFound, forbidden } = await deleteExpensesByIds(ids, req.user.id);
+    const { deleted, notFound, forbidden } = await deleteExpensesByIds(ids, req.user.companyId);
 
     // Bills are cleaned up afterwards, and never allowed to fail the delete:
     // the rows are already gone from the sheet by this point, so throwing here
@@ -166,6 +196,16 @@ export const bulkDeleteExpenses = async (req, res) => {
     const filesFailed = fileResults.filter((r) => r.status === "rejected").length;
     if (filesFailed) {
       console.warn(`Deleted ${deleted.length} expenses but ${filesFailed} bill file(s) could not be removed.`);
+    }
+
+    if (deleted.length) {
+      logAction({
+        companyId: req.user.companyId,
+        ...actorFields(req),
+        action: "deleted",
+        entity: "expense",
+        entityLabel: `${deleted.length} expense${deleted.length === 1 ? "" : "s"} (bulk delete)`,
+      });
     }
 
     res.json({
@@ -210,7 +250,16 @@ export const bulkAddExpenses = async (req, res) => {
   });
 
   try {
-    const saved = toInsert.length ? await bulkCreateExpenses(req.user.id, toInsert) : [];
+    const saved = toInsert.length ? await bulkCreateExpenses(req.user.companyId, toInsert) : [];
+    if (saved.length) {
+      logAction({
+        companyId: req.user.companyId,
+        ...actorFields(req),
+        action: "created",
+        entity: "expense",
+        entityLabel: `${saved.length} expense${saved.length === 1 ? "" : "s"} (import)`,
+      });
+    }
     res.status(201).json({ imported: saved.length, skipped });
   } catch (error) {
     console.error("Error bulk-adding expenses:", error);

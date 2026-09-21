@@ -14,10 +14,12 @@ import budgetRoutes from "./routes/budgetRoutes.js";
 import masterRoutes from "./routes/masterRoutes.js";
 import labourRoutes from "./routes/labourRoutes.js";
 import labourSheetsRoutes from "./routes/labourSheetsRoutes.js";
+import teamRoutes from "./routes/teamRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isFirestoreConfigured } from "./utils/firestoreClient.js";
 import { runMigration } from "./scripts/migrateSheetsToFirestore.js";
 import { ensureUsersSheet } from "./models/userStore.js";
+import { ensureCompaniesSheet } from "./models/companyStore.js";
 import { ensureExpensesSheet } from "./models/expenseStore.js";
 import { ensureVehiclesSheet } from "./models/vehicleStore.js";
 import { ensureBudgetsSheet } from "./models/budgetStore.js";
@@ -30,6 +32,7 @@ import {
   ensurePaymentsSheet,
 } from "./models/labourStore.js";
 import { ensureLocationsSheet } from "./models/locationStore.js";
+import { ensureAuditLogSheet } from "./utils/auditLog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -85,6 +88,7 @@ app.use("/api/budgets", budgetRoutes);
 app.use("/api/masters", masterRoutes);
 app.use("/api/labour", labourRoutes);
 app.use("/api/labour-sheets", labourSheetsRoutes);
+app.use("/api/team", teamRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
@@ -118,6 +122,7 @@ app.listen(PORT, async () => {
     try {
       await Promise.all([
         ensureUsersSheet(),
+        ensureCompaniesSheet(),
         ensureExpensesSheet(),
         ensureVehiclesSheet(),
         ensureBudgetsSheet(),
@@ -128,8 +133,9 @@ app.listen(PORT, async () => {
         ensureWageEntriesSheet(),
         ensurePaymentsSheet(),
         ensureLocationsSheet(),
+        ensureAuditLogSheet(),
       ]);
-      console.log("✅ Firestore database ready (Users + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments + Locations)");
+      console.log("✅ Firestore database ready (Users + Companies + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments + Locations + AuditLog)");
     } catch (error) {
       console.error("❌ Couldn't prepare the Firestore database:", error.message);
     }

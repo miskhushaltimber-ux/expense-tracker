@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Menu, PieChart, Database, FolderOpen, Settings } from "lucide-react";
+import { Menu, PieChart, Database, FolderOpen, Settings, Users } from "lucide-react";
 import { APP_NAME } from "../constants/brand";
+import { useAuth } from "../context/AuthContext";
 
 // The top-right corner sat empty since this navbar was first built — this
 // hamburger opened a single page (Manage Data) for a while. 18 Sep, per
@@ -14,6 +15,8 @@ import { APP_NAME } from "../constants/brand";
 // The hamburger only renders below the lg breakpoint — on desktop the sidebar
 // is always visible so there's nothing to toggle.
 const Navbar = ({ onMenuClick }) => {
+  const { user } = useAuth();
+  const isOwner = user?.role === "owner";
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -76,6 +79,19 @@ const Navbar = ({ onMenuClick }) => {
                 <FolderOpen size={17} className="mr-3 shrink-0" />
                 Documents
               </Link>
+              {/* Owner-only (19 Sep, multi-user accounts) — staff have no use
+                  for the team list or activity log, and the page itself
+                  redirects them away even if they browse here directly. */}
+              {isOwner && (
+                <Link
+                  to="/dashboard/team"
+                  onClick={() => setMenuOpen(false)}
+                  className="flex items-center px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+                >
+                  <Users size={17} className="mr-3 shrink-0" />
+                  Team &amp; Activity
+                </Link>
+              )}
             </div>
           )}
         </div>

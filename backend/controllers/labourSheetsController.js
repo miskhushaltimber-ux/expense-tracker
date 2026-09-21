@@ -24,16 +24,16 @@ export const exportLabourToSheet = async (req, res) => {
   }
 
   try {
-    const contractors = await listContractorsByUser(req.user.id);
+    const contractors = await listContractorsByUser(req.user.companyId);
     const contractorsById = new Map(contractors.map((c) => [c._id, c]));
 
     if (type === "payments") {
-      const payments = (await listPaymentsByUser(req.user.id)).sort((a, b) => new Date(a.date) - new Date(b.date));
+      const payments = (await listPaymentsByUser(req.user.companyId)).sort((a, b) => new Date(a.date) - new Date(b.date));
       await exportPaymentsToSheet(sheetUrl, payments, contractorsById);
       return res.json({ message: `Exported ${payments.length} payment${payments.length === 1 ? "" : "s"} to the Google Sheet`, count: payments.length });
     }
 
-    const wageEntries = await listWageEntriesByUser(req.user.id);
+    const wageEntries = await listWageEntriesByUser(req.user.companyId);
     await exportWorkLogToSheet(sheetUrl, wageEntries, contractorsById);
     res.json({ message: `Exported ${wageEntries.length} entr${wageEntries.length === 1 ? "y" : "ies"} to the Google Sheet`, count: wageEntries.length });
   } catch (error) {
@@ -50,18 +50,18 @@ export const emailLabourSheet = async (req, res) => {
   }
 
   try {
-    const contractors = await listContractorsByUser(req.user.id);
+    const contractors = await listContractorsByUser(req.user.companyId);
     const contractorsById = new Map(contractors.map((c) => [c._id, c]));
 
     let buffer, count, total;
     if (type === "payments") {
-      const payments = [...(await listPaymentsByUser(req.user.id))].sort((a, b) => new Date(a.date) - new Date(b.date));
+      const payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
       if (payments.length === 0) return res.status(400).json({ message: "There are no payments to send yet" });
       buffer = buildPaymentsWorkbook(payments, contractorsById);
       count = payments.length;
       total = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
     } else {
-      const wageEntries = await listWageEntriesByUser(req.user.id);
+      const wageEntries = await listWageEntriesByUser(req.user.companyId);
       if (wageEntries.length === 0) return res.status(400).json({ message: "There are no work log entries to send yet" });
       buffer = buildWorkLogWorkbook(wageEntries, contractorsById);
       count = wageEntries.length;

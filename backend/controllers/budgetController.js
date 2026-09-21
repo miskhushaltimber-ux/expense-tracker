@@ -1,8 +1,9 @@
 import { listBudgetsByUser, saveBudgetsForUser } from "../models/budgetStore.js";
+import { logAction } from "../utils/auditLog.js";
 
 export const getBudgets = async (req, res) => {
   try {
-    const budgets = await listBudgetsByUser(req.user.id);
+    const budgets = await listBudgetsByUser(req.user.companyId);
     res.json(budgets);
   } catch (error) {
     console.error("Error fetching budgets:", error);
@@ -10,10 +11,9 @@ export const getBudgets = async (req, res) => {
   }
 };
 
-// Saves many budgets in one request on purpose. The frontend batches every
-// changed row into a single call, because Google Sheets only allows 60 writes
-// a minute across the whole app — one request per edited master would burn
-// through that the first time sir fills the page in.
+// Saves many budgets in one request on purpose — the frontend batches every
+// changed row into a single call. Owner-only (see routes/budgetRoutes.js):
+// budgets are a planning/admin function, not day-to-day data entry.
 export const saveBudgets = async (req, res) => {
   const { budgets } = req.body;
 
@@ -46,7 +46,18 @@ export const saveBudgets = async (req, res) => {
   }
 
   try {
-    const saved = await saveBudgetsForUser(req.user.id, budgets);
+    const saved = await saveBudgetsForUser(req.user.companyId, budgets);
+    if (budgets.length) {
+      logAction({
+        companyId: req.user.companyId,
+        actorId: req.user.id,
+        actorName: req.user.name,
+        actorRole: req.user.role,
+        action: "updated",
+        entity: "budget",
+        entityLabel: `${budgets.length} budget${budgets.length === 1 ? "" : "s"} saved`,
+      });
+    }
     res.json(saved);
   } catch (error) {
     console.error("Error saving budgets:", error);

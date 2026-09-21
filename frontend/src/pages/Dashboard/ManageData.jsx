@@ -21,6 +21,7 @@ import {
 import { fetchVehicles, addVehicle, updateVehicle, deleteVehicle } from "../../api/vehicles";
 import { API_BASE_URL } from "../../api/config";
 import AlertsStrip, { buildVehicleAlerts } from "../../components/AlertsStrip";
+import { useAuth } from "../../context/AuthContext";
 
 // Manage Data — reached from the hamburger icon Rishi asked to finally put
 // in the navbar's empty top-right corner. Everything here is master/
@@ -115,16 +116,22 @@ const useRowCommit = (ref, commit) => () => {
   }, 0);
 };
 
-const DocCell = ({ value, label, onAttach, onRemove }) =>
+// readOnly drops the attach/remove controls entirely — a viewer can still
+// open whatever's already attached, just can't change it.
+const DocCell = ({ value, label, onAttach, onRemove, readOnly = false }) =>
   value ? (
     <span className="inline-flex items-center gap-0.5">
       <a href={value} target="_blank" rel="noopener noreferrer" title={`View ${label}`} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300">
         <FiPaperclip size={14} />
       </a>
-      <button onClick={onRemove} title={`Remove ${label}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
-        <FiX size={12} />
-      </button>
+      {!readOnly && (
+        <button onClick={onRemove} title={`Remove ${label}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
+          <FiX size={12} />
+        </button>
+      )}
     </span>
+  ) : readOnly ? (
+    <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
   ) : (
     <label className="cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${label}`}>
       <FiPaperclip size={14} />
@@ -165,6 +172,10 @@ const PersonManager = ({
   showDocs = true,
   showOpeningBalance = false,
   emptyText,
+  // Staff (19 Sep, multi-user accounts) see this data but can't add, rename,
+  // reassign, attach documents to, or delete it — it's shared reference data
+  // that a rename/delete can cascade from (mills, contractors, locations, ...).
+  readOnly = false,
 }) => {
   const emptyDraft = () => ({
     name: "",
@@ -218,6 +229,7 @@ const PersonManager = ({
         </tr>
       </thead>
       <tbody>
+        {!readOnly && (
         <tr ref={rowRef} onBlur={handleRowBlur} className="border-b border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
           {parent && (
             <td className="px-3 py-2">
@@ -280,77 +292,96 @@ const PersonManager = ({
           )}
           <td className="px-3 py-2"></td>
         </tr>
+        )}
 
         {rows.length === 0 && (
           <tr>
             <td colSpan={colCount} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
-              {emptyText}
+              {readOnly ? "Nothing here yet." : emptyText}
             </td>
           </tr>
         )}
 
         {rows.map((row) => (
           <tr key={row._id} className="border-b border-gray-100 dark:border-gray-800">
-            {parent && (
-              <td className="px-3 py-2">
-                <select
-                  value={row[parent.field] || ""}
-                  onChange={(e) => saveField(row._id, parent.field, e.target.value)}
-                  className="border border-transparent hover:border-gray-200 dark:hover:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
-                >
-                  <option value="">—</option>
-                  {parent.options.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </td>
-            )}
-            <td className="px-3 py-2">
-              <input
-                key={`${row._id}-name`}
-                defaultValue={row.name}
-                onBlur={(e) => e.target.value.trim() && e.target.value !== row.name && saveField(row._id, "name", e.target.value.trim())}
-                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
-              />
-            </td>
-            {showMobile && (
+            {parent &&
+              (readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">
+                  {parent.options.find((o) => o.value === row[parent.field])?.label || "—"}
+                </td>
+              ) : (
+                <td className="px-3 py-2">
+                  <select
+                    value={row[parent.field] || ""}
+                    onChange={(e) => saveField(row._id, parent.field, e.target.value)}
+                    className="border border-transparent hover:border-gray-200 dark:hover:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  >
+                    <option value="">—</option>
+                    {parent.options.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </td>
+              ))}
+            {readOnly ? (
+              <td className="px-3 py-2 text-sm text-gray-800 dark:text-gray-100">{row.name}</td>
+            ) : (
               <td className="px-3 py-2">
                 <input
-                  key={`${row._id}-mobile`}
-                  defaultValue={row.mobile}
-                  onBlur={(e) => e.target.value !== row.mobile && saveField(row._id, "mobile", e.target.value)}
+                  key={`${row._id}-name`}
+                  defaultValue={row.name}
+                  onBlur={(e) => e.target.value.trim() && e.target.value !== row.name && saveField(row._id, "name", e.target.value.trim())}
                   onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
                   className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
                 />
               </td>
             )}
+            {showMobile &&
+              (readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{row.mobile || "—"}</td>
+              ) : (
+                <td className="px-3 py-2">
+                  <input
+                    key={`${row._id}-mobile`}
+                    defaultValue={row.mobile}
+                    onBlur={(e) => e.target.value !== row.mobile && saveField(row._id, "mobile", e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  />
+                </td>
+              ))}
             {showDocs &&
               DOC_COLUMNS.map(({ objField, storedField, label }) => (
                 <td key={objField} className="px-3 py-2">
                   <DocCell
                     value={row[storedField]}
                     label={label}
+                    readOnly={readOnly}
                     onAttach={(file) => saveField(row._id, objField, file)}
                     onRemove={() => saveField(row._id, `remove${cap(storedField)}`, "true")}
                   />
                 </td>
               ))}
-            {showOpeningBalance && (
-              <td className="px-3 py-2">
-                <input
-                  key={`${row._id}-ob`}
-                  type="number"
-                  defaultValue={row.openingBalance}
-                  onBlur={(e) => Number(e.target.value) !== row.openingBalance && saveField(row._id, "openingBalance", Number(e.target.value) || 0)}
-                  className="w-24 border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
-                />
-              </td>
-            )}
+            {showOpeningBalance &&
+              (readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{row.openingBalance || 0}</td>
+              ) : (
+                <td className="px-3 py-2">
+                  <input
+                    key={`${row._id}-ob`}
+                    type="number"
+                    defaultValue={row.openingBalance}
+                    onBlur={(e) => Number(e.target.value) !== row.openingBalance && saveField(row._id, "openingBalance", Number(e.target.value) || 0)}
+                    className="w-24 border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  />
+                </td>
+              ))}
             <td className="px-3 py-2">
-              <button onClick={() => window.confirm(`Remove ${row.name}?`) && onDelete(row._id)} title={`Delete ${row.name}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
-                <FiTrash2 size={14} />
-              </button>
+              {!readOnly && (
+                <button onClick={() => window.confirm(`Remove ${row.name}?`) && onDelete(row._id)} title={`Delete ${row.name}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
+                  <FiTrash2 size={14} />
+                </button>
+              )}
             </td>
           </tr>
         ))}
@@ -364,7 +395,7 @@ const PersonManager = ({
 // columns (RC/Insurance) plus a number-plate photo, none of which fit that
 // generic shape. Same draft-row + Enter-key-navigation + document-status
 // coloring the sheet had on the Vehicles page itself.
-const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
+const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false }) => {
   const [rows, setRows] = useState(vehicles);
   useEffect(() => setRows(vehicles), [vehicles]);
 
@@ -572,6 +603,7 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
         </thead>
         <tbody>
           {/* Draft row — always present at the top, fills in like a spreadsheet */}
+          {!readOnly && (
           <tr className="border-b border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
             <td className="px-3 py-2">
               <input
@@ -641,11 +673,12 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
               )}
             </td>
           </tr>
+          )}
 
           {rows.length === 0 && (
             <tr>
               <td colSpan={2 + VEHICLE_DOC_FIELDS.length + 1} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
-                No vehicles yet — start typing in the row above.
+                {readOnly ? "No vehicles yet." : "No vehicles yet — start typing in the row above."}
               </td>
             </tr>
           )}
@@ -659,28 +692,36 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
 
           {filteredRows.map((vehicle) => (
             <tr key={vehicle._id} className="border-b border-gray-100 dark:border-gray-800">
-              <td className="px-3 py-2">
-                <input
-                  ref={setCellRef(vehicle._id, "name")}
-                  type="text"
-                  value={vehicle.name}
-                  onChange={(e) => updateField(vehicle._id, "name", e.target.value)}
-                  onBlur={() => saveRow(vehicle._id)}
-                  onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "name", { isDraft: false })}
-                  className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
-                />
-              </td>
+              {readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-800 dark:text-gray-100">{vehicle.name}</td>
+              ) : (
+                <td className="px-3 py-2">
+                  <input
+                    ref={setCellRef(vehicle._id, "name")}
+                    type="text"
+                    value={vehicle.name}
+                    onChange={(e) => updateField(vehicle._id, "name", e.target.value)}
+                    onBlur={() => saveRow(vehicle._id)}
+                    onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "name", { isDraft: false })}
+                    className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  />
+                </td>
+              )}
               <td className="px-3 py-2">
                 <div className="flex items-center gap-1.5">
-                  <input
-                    ref={setCellRef(vehicle._id, "numberPlate")}
-                    type="text"
-                    value={vehicle.numberPlate || ""}
-                    onChange={(e) => updateField(vehicle._id, "numberPlate", e.target.value)}
-                    onBlur={() => saveRow(vehicle._id)}
-                    onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "numberPlate", { isDraft: false })}
-                    className="min-w-0 flex-1 border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
-                  />
+                  {readOnly ? (
+                    <span className="text-sm text-gray-800 dark:text-gray-100">{vehicle.numberPlate || "—"}</span>
+                  ) : (
+                    <input
+                      ref={setCellRef(vehicle._id, "numberPlate")}
+                      type="text"
+                      value={vehicle.numberPlate || ""}
+                      onChange={(e) => updateField(vehicle._id, "numberPlate", e.target.value)}
+                      onBlur={() => saveRow(vehicle._id)}
+                      onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "numberPlate", { isDraft: false })}
+                      className="min-w-0 flex-1 border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                    />
+                  )}
                   {fileUrl(vehicle.plateFile) ? (
                     <span className="shrink-0 inline-flex items-center gap-0.5">
                       <a
@@ -692,24 +733,28 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
                       >
                         <FiPaperclip size={14} />
                       </a>
-                      <button
-                        onClick={() => handleRemoveDoc(vehicle._id, "plateFile", "Number plate photo")}
-                        className="text-gray-300 dark:text-gray-500 hover:text-red-600"
-                        title="Remove the number plate photo"
-                      >
-                        <FiX size={12} />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          onClick={() => handleRemoveDoc(vehicle._id, "plateFile", "Number plate photo")}
+                          className="text-gray-300 dark:text-gray-500 hover:text-red-600"
+                          title="Remove the number plate photo"
+                        >
+                          <FiX size={12} />
+                        </button>
+                      )}
                     </span>
                   ) : (
-                    <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a photo of the number plate">
-                      <FiPaperclip size={14} />
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,application/pdf"
-                        className="hidden"
-                        onChange={(e) => handleRowFileChange(vehicle._id, "plateFileObj", e.target.files?.[0], "Number plate photo")}
-                      />
-                    </label>
+                    !readOnly && (
+                      <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a photo of the number plate">
+                        <FiPaperclip size={14} />
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
+                          className="hidden"
+                          onChange={(e) => handleRowFileChange(vehicle._id, "plateFileObj", e.target.files?.[0], "Number plate photo")}
+                        />
+                      </label>
+                    )
                   )}
                 </div>
               </td>
@@ -719,16 +764,26 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
                 return (
                   <td key={f.key} className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <input
-                        ref={setCellRef(vehicle._id, f.expiryField)}
-                        type="date"
-                        value={vehicle[f.expiryField] ? new Date(vehicle[f.expiryField]).toISOString().split("T")[0] : ""}
-                        onChange={(e) => updateField(vehicle._id, f.expiryField, e.target.value)}
-                        onBlur={() => saveRow(vehicle._id)}
-                        onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, f.expiryField, { isDraft: false })}
-                        className={`min-w-0 flex-1 border rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 ${DATE_STATUS_CLASSES[status]}`}
-                        title={status === "expired" ? "Expired" : status === "expiring" ? "Expiring within 30 days" : ""}
-                      />
+                      {readOnly ? (
+                        <span
+                          className={`text-sm px-2 py-1 rounded ${
+                            status === "expired" ? "text-red-700 dark:text-red-300" : status === "expiring" ? "text-amber-700 dark:text-amber-300" : "text-gray-600 dark:text-gray-300"
+                          }`}
+                        >
+                          {vehicle[f.expiryField] ? new Date(vehicle[f.expiryField]).toLocaleDateString("en-IN") : "—"}
+                        </span>
+                      ) : (
+                        <input
+                          ref={setCellRef(vehicle._id, f.expiryField)}
+                          type="date"
+                          value={vehicle[f.expiryField] ? new Date(vehicle[f.expiryField]).toISOString().split("T")[0] : ""}
+                          onChange={(e) => updateField(vehicle._id, f.expiryField, e.target.value)}
+                          onBlur={() => saveRow(vehicle._id)}
+                          onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, f.expiryField, { isDraft: false })}
+                          className={`min-w-0 flex-1 border rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 ${DATE_STATUS_CLASSES[status]}`}
+                          title={status === "expired" ? "Expired" : status === "expiring" ? "Expiring within 30 days" : ""}
+                        />
+                      )}
                       {fileHref ? (
                         <span className="shrink-0 inline-flex items-center gap-0.5">
                           <a
@@ -740,33 +795,39 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete }) => {
                           >
                             <FiPaperclip size={14} />
                           </a>
-                          <button
-                            onClick={() => handleRemoveDoc(vehicle._id, f.fileField, f.label)}
-                            className="text-gray-300 dark:text-gray-500 hover:text-red-600"
-                            title={`Remove ${f.label}`}
-                          >
-                            <FiX size={12} />
-                          </button>
+                          {!readOnly && (
+                            <button
+                              onClick={() => handleRemoveDoc(vehicle._id, f.fileField, f.label)}
+                              className="text-gray-300 dark:text-gray-500 hover:text-red-600"
+                              title={`Remove ${f.label}`}
+                            >
+                              <FiX size={12} />
+                            </button>
+                          )}
                         </span>
                       ) : (
-                        <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
-                          <FiPaperclip size={14} />
-                          <input
-                            type="file"
-                            accept="image/jpeg,image/png,image/webp,application/pdf"
-                            className="hidden"
-                            onChange={(e) => handleRowFileChange(vehicle._id, `${f.key}FileObj`, e.target.files?.[0], f.label)}
-                          />
-                        </label>
+                        !readOnly && (
+                          <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
+                            <FiPaperclip size={14} />
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,application/pdf"
+                              className="hidden"
+                              onChange={(e) => handleRowFileChange(vehicle._id, `${f.key}FileObj`, e.target.files?.[0], f.label)}
+                            />
+                          </label>
+                        )
                       )}
                     </div>
                   </td>
                 );
               })}
               <td className="px-3 py-2">
-                <button onClick={() => handleDelete(vehicle)} title={`Delete ${vehicle.name}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
-                  <FiTrash2 size={14} />
-                </button>
+                {!readOnly && (
+                  <button onClick={() => handleDelete(vehicle)} title={`Delete ${vehicle.name}`} className="text-gray-300 dark:text-gray-500 hover:text-red-600">
+                    <FiTrash2 size={14} />
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -801,6 +862,12 @@ const Section = ({ icon: Icon, title, children }) => {
 };
 
 const ManageData = () => {
+  const { user } = useAuth();
+  // Staff (19 Sep, multi-user accounts) can see everything here but can't
+  // add/rename/delete any of it — this is shared reference data whose
+  // rename/delete cascades onto expenses, mills or budgets, so it stays
+  // owner-only. Day-to-day entry (the actual sheets) is unaffected.
+  const isStaff = user?.role === "staff";
   const [locations, setLocations] = useState([]);
   const [mills, setMills] = useState([]);
   const [contractors, setContractors] = useState([]);
@@ -844,8 +911,9 @@ const ManageData = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100">Manage Data</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-          Add, rename or remove mills, contractors, labor and vehicles here. The Labor Wages sheet and Vehicle Expense
-          Sheet only log their day-to-day entries.
+          {isStaff
+            ? "View-only — ask the account owner to add, rename or remove anything here."
+            : "Add, rename or remove mills, contractors, labor and vehicles here. The Labor Wages sheet and Vehicle Expense Sheet only log their day-to-day entries."}
         </p>
       </div>
 
@@ -857,6 +925,7 @@ const ManageData = () => {
           onAdd={(fields) => addVehicle(fields).then(loadData)}
           onUpdate={(id, fields) => updateVehicle(id, fields).then(loadData)}
           onDelete={(id) => deleteVehicle(id).then(loadData)}
+          readOnly={isStaff}
         />
       </Section>
 
@@ -874,6 +943,7 @@ const ManageData = () => {
           showMobile={false}
           showDocs={false}
           emptyText="No locations yet — type a name above."
+          readOnly={isStaff}
         />
       </Section>
 
@@ -888,6 +958,7 @@ const ManageData = () => {
           showMobile={false}
           showDocs={false}
           emptyText={locations.length === 0 ? "Add a location above first." : "No mills yet — pick a location and type a name above."}
+          readOnly={isStaff}
         />
       </Section>
 
@@ -905,6 +976,7 @@ const ManageData = () => {
           }}
           showOpeningBalance
           emptyText={mills.length === 0 ? "Add a mill above first." : "No contractors yet — pick a mill and type a name above."}
+          readOnly={isStaff}
         />
       </Section>
 
@@ -917,6 +989,7 @@ const ManageData = () => {
           namePlaceholder="Labor name"
           parent={{ field: "contractorId", label: "Contractor", options: contractors.map((c) => ({ value: c._id, label: c.name })) }}
           emptyText={contractors.length === 0 ? "Add a contractor above first." : "No labor yet — pick a contractor and type a name above."}
+          readOnly={isStaff}
         />
       </Section>
     </div>

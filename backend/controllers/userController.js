@@ -1,10 +1,18 @@
 import jwt from "jsonwebtoken";
-import { findUserByEmail, findUserById, createUser, verifyPassword, updateUserPassword } from "../models/userStore.js";
+import { findUserByEmail, findUserById, createUser, verifyPassword, updateUserPassword, setUserCompany, ensureUserHasCompany } from "../models/userStore.js";
+import { createCompany } from "../models/companyStore.js";
 import { sendPasswordResetEmail } from "../utils/mailer.js";
 
-// Helper to generate JWT
-const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
+// The JWT carries companyId/role so every request resolves scope and
+// permissions with no extra DB read (see authMiddleware.js's protect()) —
+// name is included too, purely so the audit log can show a real name
+// without a lookup on every write.
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, name: user.name, companyId: user.companyId, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
 };
 
 const publicUser = (user) => ({
@@ -12,10 +20,14 @@ const publicUser = (user) => ({
   id: user.id,
   name: user.name,
   email: user.email,
+  companyId: user.companyId,
+  role: user.role,
   createdAt: user.createdAt,
 });
 
-// Register User
+// Register User — always creates a brand-new company with this user as its
+// owner. Staff accounts are never created here; the owner adds them from the
+// Team page (POST /api/team/staff) once they're already logged in.
 const registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -30,13 +42,17 @@ const registerUser = async (req, res) => {
     }
 
     const newUser = await createUser({ name, email, password });
-    const token = generateToken(newUser.id);
+    const company = await createCompany({ name: `${newUser.name}'s Company`, ownerId: newUser.id });
+    await setUserCompany(newUser.id, { companyId: company.id, role: "owner" });
+    const fullUser = { ...newUser, companyId: company.id, role: "owner" };
+
+    const token = generateToken(fullUser);
 
     res.status(201).json({
       success: true,
       message: "User registered successfully",
       token,
-      user: publicUser(newUser),
+      user: publicUser(fullUser),
     });
   } catch (error) {
     console.error("❌ Signup Error:", error);
@@ -59,8 +75,13 @@ const loginUser = async (req, res) => {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    const token = generateToken(user.id);
-    return res.json({ success: true, message: "Login successful", token, user: publicUser(user) });
+    // A login that predates multi-user accounts won't have a company yet —
+    // backfill it here so the very first token issued after this feature is
+    // already fully populated, rather than waiting on protect()'s fallback.
+    const fullUser = user.companyId ? user : await ensureUserHasCompany(user.id);
+
+    const token = generateToken(fullUser);
+    return res.json({ success: true, message: "Login successful", token, user: publicUser(fullUser) });
   } catch (error) {
     console.error("❌ Login Error:", error);
     res.status(500).json({ success: false, message: error.message || "Internal Server Error" });

@@ -15,7 +15,7 @@ export const previewImport = async (req, res) => {
     const { rows, warnings, columnMapping } = parseSheetToPreview(req.file.buffer, req.file.originalname);
     const { rows: resolvedRows, warnings: destWarnings, vehicleOptions, contractorOptions } = await resolveImportDestinations(
       rows,
-      req.user.id
+      req.user.companyId
     );
     res.json({
       rows: resolvedRows,

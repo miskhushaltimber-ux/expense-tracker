@@ -1,5 +1,5 @@
 import { listVehiclesByUser } from "../models/vehicleStore.js";
-import { listContractorsByUser } from "../models/labourStore.js";
+import { listContractorsByUser, createContractor } from "../models/labourStore.js";
 
 // The Expenses page's importer (file upload or "From Google Sheet") only
 // ever created plain expense rows, with no way to notice a row was actually
@@ -38,6 +38,30 @@ import { listContractorsByUser } from "../models/labourStore.js";
 // is a REVIEW-BEFORE-SAVE step, not an auto-save: the frontend shows every
 // row's resolved destination, with the full vehicle/contractor list, so a
 // wrong guess can be fixed before anything is written to the database.
+//
+// 21 Sep, per Rishi (pasted his real ledger): his sheets DO have a Master
+// column, and for labor rows it's already the strongest signal there is —
+// "Repso Thekedar", "Mill Thekedar", "Pilling Thekedar", "Loading Thekedar",
+// "Bundle Thekedar" — but individual worker names in the expense text
+// ("Sanoj", "Vikas", "Mukesh", ...) essentially never match a saved
+// Contractor, which is why almost nothing was auto-routing. Scoped via
+// AskUserQuestion: Rishi chose to auto-create one Contractor per Thekedar
+// Master category the first time it's seen (e.g. every "Repso Thekedar" row
+// lands under one Contractor named "Repso Thekedar"), rather than requiring
+// every individual worker to be a pre-created Contractor, or requiring the
+// Contractor to already exist before it'll match. A "Kn"/"Mn" mill-unit
+// suffix some Masters carry ("Bundle Thekedar K-2") is stripped before
+// matching/creating, so it collapses onto the same Contractor as the
+// suffix-free form ("Bundle Thekedar") rather than fragmenting into one
+// Contractor per mill unit. Vehicle matching is untouched — Rishi confirmed
+// keeping description-text matching there (equipment names like "Loader",
+// "JCB", "Bike" already appear directly in his expense text).
+const THEKEDAR_RE = /thekedar/i;
+const MILL_UNIT_SUFFIX_RE = /\s+[A-Za-z]-?\d+(?:\/\d+)?$/;
+
+const isThekedarMaster = (master) => THEKEDAR_RE.test(master || "");
+
+const contractorNameFromMaster = (master) => (master || "").trim().replace(MILL_UNIT_SUFFIX_RE, "").trim();
 
 const normalize = (s) => (s || "").trim().toLowerCase();
 
@@ -97,46 +121,96 @@ const findContractorInText = (contractors, text) => {
 export const resolveImportDestinations = async (rows, userId) => {
   // Free-text scanning needs both lists on every import, not just when a
   // dedicated column is present — that's the whole point of this path.
+  // `contractors` is mutated in place below as new ones get auto-created, so
+  // a second "Repso Thekedar" row later in the SAME import reuses the one
+  // just created for the first, instead of creating a duplicate.
   const [vehicles, contractors] = await Promise.all([listVehiclesByUser(userId), listContractorsByUser(userId)]);
 
   const warnings = [];
   let autoMatchedFromText = 0;
+  const autoCreatedContractorNames = [];
 
-  const resolvedRows = rows.map((row) => {
+  // Sequential, not Promise.all/map — a row that auto-creates a Contractor
+  // must be visible to every later row in this same import before they run.
+  const resolvedRows = [];
+  for (const row of rows) {
     if (row.vehicleText) {
       const vehicle = findVehicleByColumn(vehicles, row.vehicleText);
-      if (vehicle) return { ...row, route: "vehicle", vehicleId: vehicle.id, vehicleName: vehicle.name };
+      if (vehicle) {
+        resolvedRows.push({ ...row, route: "vehicle", vehicleId: vehicle.id, vehicleName: vehicle.name });
+        continue;
+      }
       warnings.push(
         `Row ${row._rowNumber}: vehicle "${row.vehicleText}" doesn't match any saved vehicle — will be saved as a plain expense unless you pick one below. Add it on the Vehicles page first if it should exist.`
       );
-      return { ...row, route: "expense" };
+      resolvedRows.push({ ...row, route: "expense" });
+      continue;
     }
 
     if (row.contractorText) {
       const contractor = findContractorByColumn(contractors, row.contractorText);
-      if (contractor) return { ...row, route: "payment", contractorId: contractor.id, contractorName: contractor.name };
+      if (contractor) {
+        resolvedRows.push({ ...row, route: "payment", contractorId: contractor.id, contractorName: contractor.name });
+        continue;
+      }
       warnings.push(
         `Row ${row._rowNumber}: contractor "${row.contractorText}" doesn't match any saved contractor — will be saved as a plain expense unless you pick one below. Add them on the Labor Wages page first if they should exist.`
       );
-      return { ...row, route: "expense" };
+      resolvedRows.push({ ...row, route: "expense" });
+      continue;
     }
 
-    // No dedicated column — the common case for Rishi's sheets — so scan the
-    // expense/description text itself.
+    // No dedicated column — the common case for Rishi's sheets. A Thekedar
+    // Master is the strongest signal available and is checked first; only
+    // if that doesn't apply do we fall back to scanning the description text
+    // for a vehicle or contractor name.
+    if (isThekedarMaster(row.master)) {
+      const contractorName = contractorNameFromMaster(row.master);
+      if (contractorName) {
+        let contractor = findContractorByColumn(contractors, contractorName);
+        if (!contractor) {
+          try {
+            contractor = await createContractor({ userId, name: contractorName, millId: "" });
+            contractors.push(contractor);
+            autoCreatedContractorNames.push(contractorName);
+          } catch (err) {
+            warnings.push(
+              `Row ${row._rowNumber}: couldn't auto-create a Contractor for Master "${row.master}" (${err.message}) — will be saved as a plain expense unless you pick a destination below.`
+            );
+          }
+        }
+        if (contractor) {
+          resolvedRows.push({ ...row, route: "payment", contractorId: contractor.id, contractorName: contractor.name });
+          continue;
+        }
+      }
+    }
+
     const vehicleHit = findVehicleInText(vehicles, row.expense);
     if (vehicleHit) {
       autoMatchedFromText += 1;
-      return { ...row, route: "vehicle", vehicleId: vehicleHit.id, vehicleName: vehicleHit.name };
+      resolvedRows.push({ ...row, route: "vehicle", vehicleId: vehicleHit.id, vehicleName: vehicleHit.name });
+      continue;
     }
 
     const contractorHit = findContractorInText(contractors, row.expense);
     if (contractorHit) {
       autoMatchedFromText += 1;
-      return { ...row, route: "payment", contractorId: contractorHit.id, contractorName: contractorHit.name };
+      resolvedRows.push({ ...row, route: "payment", contractorId: contractorHit.id, contractorName: contractorHit.name });
+      continue;
     }
 
-    return { ...row, route: "expense" };
-  });
+    resolvedRows.push({ ...row, route: "expense" });
+  }
+
+  if (autoCreatedContractorNames.length > 0) {
+    const unique = [...new Set(autoCreatedContractorNames)];
+    warnings.push(
+      `Created ${unique.length} new Contractor${unique.length === 1 ? "" : "s"} to match your Master categories: ${unique.join(
+        ", "
+      )}. You can assign a mill, mobile number, or opening balance to ${unique.length === 1 ? "it" : "them"} any time on the Manage Data page.`
+    );
+  }
 
   if (autoMatchedFromText > 0) {
     warnings.push(

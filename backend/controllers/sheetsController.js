@@ -29,8 +29,8 @@ export const emailSheet = async (req, res) => {
 
   try {
     const [allExpenses, vehicles] = await Promise.all([
-      listExpensesByUser(req.user.id),
-      listVehiclesByUser(req.user.id).catch(() => []),
+      listExpensesByUser(req.user.companyId),
+      listVehiclesByUser(req.user.companyId).catch(() => []),
     ]);
     const expenses = scope === "vehicles" ? allExpenses.filter((e) => e.vehicleId) : allExpenses;
     if (expenses.length === 0) {
@@ -74,7 +74,7 @@ export const exportToSheet = async (req, res) => {
   }
 
   try {
-    const allExpenses = await listExpensesByUser(req.user.id);
+    const allExpenses = await listExpensesByUser(req.user.companyId);
     const expenses = (scope === "vehicles" ? allExpenses.filter((e) => e.vehicleId) : allExpenses).sort(
       (a, b) => new Date(a.date) - new Date(b.date)
     );
@@ -100,7 +100,7 @@ export const previewFromSheet = async (req, res) => {
     const { rows, warnings, columnMapping } = parseSheetValuesToPreview(values);
     const { rows: resolvedRows, warnings: destWarnings, vehicleOptions, contractorOptions } = await resolveImportDestinations(
       rows,
-      req.user.id
+      req.user.companyId
     );
     res.json({
       rows: resolvedRows,

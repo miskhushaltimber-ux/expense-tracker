@@ -21,6 +21,7 @@ const Vehicles = lazy(() => import('./pages/Dashboard/Vehicles'));
 const LaborWages = lazy(() => import('./pages/Dashboard/LaborWages'));
 const ManageData = lazy(() => import('./pages/Dashboard/ManageData'));
 const Documents = lazy(() => import('./pages/Dashboard/Documents'));
+const Team = lazy(() => import('./pages/Dashboard/Team'));
 
 // PrivateRoute component to protect routes
 import PrivateRoute from './components/PrivateRoute';
@@ -56,6 +57,7 @@ const AppRouter = () => {
               <Route path="labor-wages" element={<LaborWages />} />
               <Route path="manage-data" element={<ManageData />} />
               <Route path="documents" element={<Documents />} />
+              <Route path="team" element={<Team />} />
             </Route>
           </Route>
 
