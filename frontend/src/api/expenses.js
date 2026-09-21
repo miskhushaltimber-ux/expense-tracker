@@ -9,6 +9,11 @@ const toFormData = (expenseData) => {
   Object.entries(expenseData).forEach(([key, value]) => {
     if (key === "bill" && value) {
       formData.append("bill", value);
+    } else if (key === "customFields") {
+      // 21 Sep, custom-columns feature — a plain object can't ride in a
+      // multipart field directly (it'd stringify to "[object Object]"), so
+      // it goes over as JSON text; the backend parses it back out.
+      if (value && Object.keys(value).length) formData.append("customFields", JSON.stringify(value));
     } else if (value !== undefined && value !== null && key !== "bill") {
       formData.append(key, value);
     }

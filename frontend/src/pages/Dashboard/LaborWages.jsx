@@ -20,6 +20,8 @@ import { FILE_PREFIX } from "../../constants/brand";
 import { downloadCsv } from "../../utils/exportCsv";
 import ImportSheetModal from "../../components/ImportSheetModal";
 import ExportSheetModal from "../../components/ExportSheetModal";
+import { CustomCell, ManageColumnsButton } from "../../components/CustomColumns";
+import { fetchColumns } from "../../api/columns";
 
 const todayStr = () => new Date().toISOString().split("T")[0];
 
@@ -99,18 +101,34 @@ const LedgerSheet = ({
   onBulkDelete, // (ids) => Promise — omit to leave bulk-delete off for this sheet
   search,
   allowedContractorIds, // Set of contractorId, or null/undefined for "no filter"
+  sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
 }) => {
   const isRange = dateMode === "range";
   const emptyDraft = () => ({
     contractorId: "",
     ...(isRange ? { dateFrom: "", dateTo: "" } : { date: "" }),
     ...Object.fromEntries(fields.map((f) => [f.key, ""])),
+    customFields: {},
   });
   const [draft, setDraft] = useState(emptyDraft());
   const rowRef = useRef(null);
   const fieldRefs = useRef({});
   const setFieldRef = (key) => (el) => {
     fieldRefs.current[key] = el;
+  };
+
+  // Custom columns (21 Sep) — Work Log and Payments keep independent column
+  // sets even though they share this component, since they're genuinely
+  // different ledger shapes (see backend/models/columnDefStore.js's header).
+  const [customColumns, setCustomColumns] = useState([]);
+  const loadColumns = () => fetchColumns(sheetKey).then(setCustomColumns).catch(() => setCustomColumns([]));
+  useEffect(() => {
+    loadColumns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetKey]);
+
+  const handleDraftCustomFieldChange = (colDef, value) => {
+    setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
   };
 
   const FIELD_ORDER = isRange
@@ -209,6 +227,9 @@ const LedgerSheet = ({
 
   return (
     <div>
+      <div className="flex justify-end px-4 pt-3">
+        <ManageColumnsButton sheetKey={sheetKey} columns={customColumns} onChanged={loadColumns} />
+      </div>
       {onBulkDelete && selectedIds.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 bg-red-50 dark:bg-red-900/25 border border-red-200 dark:border-red-800 rounded-lg px-4 py-2.5 mx-4 mb-2">
           <span className="text-sm font-medium text-red-800 dark:text-red-200">
@@ -281,6 +302,9 @@ const LedgerSheet = ({
           {fields.map((f) => (
             <th key={f.key} className="px-3 py-2 font-medium">{f.label}</th>
           ))}
+          {customColumns.map((col) => (
+            <th key={col._id} className="px-3 py-2 font-medium whitespace-nowrap">{col.label}</th>
+          ))}
           {computeAmount && <th className="px-3 py-2 font-medium">Amount</th>}
           <th className="px-3 py-2"></th>
         </tr>
@@ -351,6 +375,15 @@ const LedgerSheet = ({
               />
             </td>
           ))}
+          {customColumns.map((col) => (
+            <td key={col._id} className="px-3 py-2">
+              <CustomCell
+                colDef={col}
+                value={draft.customFields?.[col.key]}
+                onChange={(value) => handleDraftCustomFieldChange(col, value)}
+              />
+            </td>
+          ))}
           {computeAmount && <td className="px-3 py-2 text-gray-400">{liveAmount != null ? money(liveAmount) : "—"}</td>}
           <td className="px-3 py-2"></td>
         </tr>
@@ -358,7 +391,7 @@ const LedgerSheet = ({
         {filtered.length === 0 && (
           <tr>
             <td
-              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 2 + fields.length + (computeAmount ? 1 : 0)}
+              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 2 + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
               className="px-3 py-2 text-gray-400 italic"
             >
               {rows.length === 0 ? "Nothing logged yet." : "No rows match your search."}
@@ -392,6 +425,11 @@ const LedgerSheet = ({
               <td className="px-3 py-2">{c?.label || "—"}</td>
               {fields.map((f) => (
                 <td key={f.key} className="px-3 py-2">{f.format ? f.format(row[f.key]) : row[f.key]}</td>
+              ))}
+              {customColumns.map((col) => (
+                <td key={col._id} className="px-3 py-2">
+                  <CustomCell colDef={col} value={row.customFields?.[col.key]} disabled />
+                </td>
               ))}
               {computeAmount && <td className="px-3 py-2 font-medium">{renderAmount(row)}</td>}
               <td className="px-3 py-2">
@@ -786,11 +824,20 @@ const LaborWages = () => {
               ]}
               computeAmount={(d) => (d.cft && d.rate ? Number(d.cft) * Number(d.rate) : null)}
               renderAmount={(row) => money(row.amount)}
-              onAdd={(draft) => addWageEntry({ contractorId: draft.contractorId, dateLabel: draft.date, cft: draft.cft, rate: draft.rate }).then(loadData)}
+              onAdd={(draft) =>
+                addWageEntry({
+                  contractorId: draft.contractorId,
+                  dateLabel: draft.date,
+                  cft: draft.cft,
+                  rate: draft.rate,
+                  customFields: draft.customFields,
+                }).then(loadData)
+              }
               onDelete={(id) => deleteWageEntry(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeleteWageEntries(ids).then(loadData)}
               search={search}
               allowedContractorIds={allowedContractorIds}
+              sheetKey="wageEntries"
             />
           </div>
         </div>
@@ -832,11 +879,20 @@ const LaborWages = () => {
                 { key: "label", label: "Label", placeholder: "CASH/ADV, S&E, ..." },
                 { key: "amount", label: "Amount", placeholder: "Amount", type: "number", width: 100, format: money },
               ]}
-              onAdd={(draft) => addPayment({ contractorId: draft.contractorId, date: draft.date, label: draft.label, amount: draft.amount }).then(loadData)}
+              onAdd={(draft) =>
+                addPayment({
+                  contractorId: draft.contractorId,
+                  date: draft.date,
+                  label: draft.label,
+                  amount: draft.amount,
+                  customFields: draft.customFields,
+                }).then(loadData)
+              }
               onDelete={(id) => deletePayment(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeletePayments(ids).then(loadData)}
               search={search}
               allowedContractorIds={allowedContractorIds}
+              sheetKey="payments"
             />
           </div>
         </div>

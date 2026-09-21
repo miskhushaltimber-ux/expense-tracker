@@ -13,9 +13,16 @@ import {
   deleteRowAt,
   deleteRowsAt,
 } from "../utils/firestoreDb.js";
+import { parseCustomFields, serializeCustomFields } from "../utils/customFields.js";
 
 const SHEET_NAME = "Expenses";
-const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres", "odometer"];
+const HEADERS = [
+  "id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres", "odometer",
+  // 21 Sep, custom-columns feature — see utils/customFields.js. Shared by
+  // the Expense Sheet and the Vehicle Expense Sheet, since both read/write
+  // the exact same rows here.
+  "customFields",
+];
 
 export const ensureExpensesSheet = () => ensureSheetTab(SHEET_NAME, HEADERS);
 
@@ -42,6 +49,7 @@ const toExpense = (row) => ({
   // reading it gives distance run, and distance / litres gives real mileage —
   // the only way to spot fuel going missing rather than just being overcharged.
   odometer: row.odometer === "" || row.odometer === undefined ? null : Number(row.odometer) || null,
+  customFields: parseCustomFields(row.customFields),
 });
 
 const timeOf = (d) => {
@@ -57,7 +65,7 @@ export const listExpensesByUser = async (userId) => {
     .sort((a, b) => timeOf(b.date) - timeOf(a.date) || timeOf(b.createdAt) - timeOf(a.createdAt));
 };
 
-export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId, litres, odometer }) => {
+export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId, litres, odometer, customFields }) => {
   const now = new Date().toISOString();
   const row = {
     id: crypto.randomUUID(),
@@ -72,6 +80,7 @@ export const createExpense = async ({ userId, date, expense, amount, master, bil
     vehicleId: vehicleId || "",
     litres: litres === undefined || litres === null || litres === "" ? "" : Number(litres),
     odometer: odometer === undefined || odometer === null || odometer === "" ? "" : Number(odometer),
+    customFields: serializeCustomFields(customFields),
   };
   await appendRow(SHEET_NAME, HEADERS, row);
   return toExpense(row);
@@ -97,6 +106,7 @@ export const bulkCreateExpenses = async (userId, rows) => {
     vehicleId: r.vehicleId || "",
     litres: r.litres === undefined || r.litres === null || r.litres === "" ? "" : Number(r.litres),
     odometer: r.odometer === undefined || r.odometer === null || r.odometer === "" ? "" : Number(r.odometer),
+    customFields: serializeCustomFields(r.customFields),
   }));
   await appendRows(SHEET_NAME, HEADERS, prepared);
   return prepared.map(toExpense);
@@ -119,6 +129,13 @@ export const updateExpenseById = async (id, userId, updates) => {
   if (updates.litres !== undefined) merged.litres = updates.litres === "" || updates.litres === null ? "" : Number(updates.litres);
   if (updates.odometer !== undefined)
     merged.odometer = updates.odometer === "" || updates.odometer === null ? "" : Number(updates.odometer);
+  // A customFields patch replaces the WHOLE blob (merged with the row's
+  // existing values first) rather than the raw JSON string overwriting
+  // outright — a cell-by-cell edit only ever sends the one column that
+  // changed, and shouldn't blank out every other custom column on this row.
+  if (updates.customFields !== undefined) {
+    merged.customFields = serializeCustomFields({ ...parseCustomFields(row.customFields), ...updates.customFields });
+  }
   await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
   return { expense: toExpense(merged) };
 };

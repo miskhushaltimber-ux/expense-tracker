@@ -16,6 +16,8 @@ import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { FILE_PREFIX } from "/src/constants/brand";
 import { downloadCsv } from "/src/utils/exportCsv";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
+import { CustomCell, ManageColumnsButton } from "/src/components/CustomColumns";
+import { fetchColumns } from "/src/api/columns";
 import AlertsStrip, { buildExpenseAlerts, buildBudgetAlerts } from "/src/components/AlertsStrip";
 import { fetchBudgets, saveBudgets } from "/src/api/budgets";
 import SuggestInput from "/src/components/SuggestInput";
@@ -52,7 +54,7 @@ const billUrl = (billFile) => {
 
 const todayStr = () => new Date().toISOString().split("T")[0];
 
-const emptyDraft = () => ({ date: todayStr(), expense: "", amount: "", master: "", billFileObj: null });
+const emptyDraft = () => ({ date: todayStr(), expense: "", amount: "", master: "", billFileObj: null, customFields: {} });
 
 const notifySuccess = (message) => toast.success(message, { position: "top-right", autoClose: 3000 });
 const notifyError = (message) => toast.error(message, { position: "top-right", autoClose: 4000 });
@@ -78,6 +80,9 @@ const Expenses = () => {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(emptyDraft());
   const [savingDraft, setSavingDraft] = useState(false);
+  // Custom columns (21 Sep) — this sheet's column set, shared with the
+  // Vehicle Expense Sheet since both read/write the same Expenses rows.
+  const [customColumns, setCustomColumns] = useState([]);
 
   const [search, setSearch] = useState("");
   const [groupBy, setGroupBy] = useState("none"); // "none" | "date" | "master"
@@ -184,17 +189,20 @@ const Expenses = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [expenseData, masterData, vehicleData] = await Promise.all([
+      const [expenseData, masterData, vehicleData, columnData] = await Promise.all([
         fetchExpenses(),
         fetchMasterCatalog(),
         // Only used to offer a vehicle when one is clearly meant — a failure
         // here shouldn't stop the sheet loading.
         fetchVehicles().catch(() => []),
+        // Custom columns — a failure here shouldn't stop the sheet loading either.
+        fetchColumns("expenses").catch(() => []),
       ]);
       setRows(Array.isArray(expenseData) ? expenseData : []);
       setMasterCatalog(Array.isArray(masterData) ? masterData : []);
       setMasters(masterData?.length ? masterData.map((m) => m.name) : DEFAULT_EXPENSE_MASTERS);
       setVehicles(Array.isArray(vehicleData) ? vehicleData : []);
+      setCustomColumns(Array.isArray(columnData) ? columnData : []);
     } catch (err) {
       notifyError("Failed to load the expense sheet");
     } finally {
@@ -205,6 +213,17 @@ const Expenses = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // ManageColumnsButton's onChanged — reloading just the column list avoids
+  // re-fetching the whole expense sheet for what's only a shape change.
+  const reloadColumns = async () => {
+    try {
+      const columnData = await fetchColumns("expenses");
+      setCustomColumns(Array.isArray(columnData) ? columnData : []);
+    } catch (err) {
+      notifyError("Failed to refresh the columns");
+    }
+  };
 
   // Called after a master is added, renamed or deleted from the dropdown.
   // A rename rewrites the Master column on every entry that used it, so the
@@ -303,6 +322,37 @@ const Expenses = () => {
     }
   };
 
+  // Custom columns: select/date types save the moment they change (that's
+  // how a dropdown/date picker already behaves elsewhere in this sheet),
+  // text/number save on blur like every other typed cell. Either way it's a
+  // one-field PATCH — the backend merges it onto the row's existing
+  // customFields rather than replacing the whole blob.
+  const saveCustomField = async (id, key, value) => {
+    try {
+      await updateExpense(id, { customFields: { [key]: value } });
+    } catch (err) {
+      notifyError(err.message || "Failed to save that value");
+      loadData();
+    }
+  };
+
+  const handleCustomFieldChange = (colDef, id, value) => {
+    setRows((prev) =>
+      prev.map((r) => (r._id === id ? { ...r, customFields: { ...r.customFields, [colDef.key]: value } } : r))
+    );
+    if (colDef.type === "select" || colDef.type === "date") saveCustomField(id, colDef.key, value);
+  };
+
+  const handleCustomFieldBlur = (colDef, id) => {
+    if (colDef.type === "select" || colDef.type === "date") return; // already saved on change
+    const row = rows.find((r) => r._id === id);
+    saveCustomField(id, colDef.key, row?.customFields?.[colDef.key]);
+  };
+
+  const handleDraftCustomFieldChange = (colDef, value) => {
+    setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
+  };
+
   const handleRowBillChange = async (id, file) => {
     if (!file) return;
     try {
@@ -370,6 +420,7 @@ const Expenses = () => {
         master: draft.master.trim(),
         bill: draft.billFileObj || undefined,
         vehicleId: vehicleId || undefined,
+        customFields: draft.customFields,
       });
       setRows((prev) => [saved, ...prev]);
       setDraft(emptyDraft());
@@ -623,6 +674,16 @@ const Expenses = () => {
       <td className="px-2 py-2">
         {renderBudgetCell(row.master)}
       </td>
+      {customColumns.map((col) => (
+        <td key={col._id} className="px-2 py-2">
+          <CustomCell
+            colDef={col}
+            value={row.customFields?.[col.key]}
+            onChange={(value) => handleCustomFieldChange(col, row._id, value)}
+            onBlur={() => handleCustomFieldBlur(col, row._id)}
+          />
+        </td>
+      ))}
       <td className="px-2 py-2 text-center">
         {row.billFile ? (
           <div className="inline-flex items-center justify-center gap-0.5">
@@ -743,6 +804,7 @@ const Expenses = () => {
               <option value="master">Master</option>
             </select>
           </div>
+          <ManageColumnsButton sheetKey="expenses" columns={customColumns} onChanged={reloadColumns} />
         </div>
 
         {showFilters && (
@@ -879,6 +941,11 @@ const Expenses = () => {
                     <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-32">Amount</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-48">Master</th>
                     <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-32" title="Monthly budget for that master">Budget / mo</th>
+                    {customColumns.map((col) => (
+                      <th key={col._id} className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase whitespace-nowrap">
+                        {col.label}
+                      </th>
+                    ))}
                     <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-20">Bill</th>
                     <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-16"></th>
                   </tr>
@@ -940,6 +1007,15 @@ const Expenses = () => {
                     <td className="px-2 py-2">
                       {renderBudgetCell(draft.master)}
                     </td>
+                    {customColumns.map((col) => (
+                      <td key={col._id} className="px-2 py-2">
+                        <CustomCell
+                          colDef={col}
+                          value={draft.customFields?.[col.key]}
+                          onChange={(value) => handleDraftCustomFieldChange(col, value)}
+                        />
+                      </td>
+                    ))}
                     <td className="px-2 py-2 text-center">
                       <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
                         <FiPaperclip size={16} className={draft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
@@ -962,7 +1038,7 @@ const Expenses = () => {
 
                   {filteredRows.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                      <td colSpan={8 + customColumns.length} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                         {rows.length === 0
                           ? "No expenses yet — start typing in the row above."
                           : "No expenses match your search/filters."}
@@ -981,7 +1057,7 @@ const Expenses = () => {
                               className="bg-gray-100 dark:bg-gray-800 cursor-pointer select-none"
                               onClick={() => toggleGroup(group.key)}
                             >
-                              <td colSpan={8} className="px-3 py-2">
+                              <td colSpan={8 + customColumns.length} className="px-3 py-2">
                                 <div className="flex items-center justify-between">
                                   <span className="flex items-center font-semibold text-gray-700 dark:text-gray-200 text-sm">
                                     {isCollapsed ? <FiChevronRight size={14} className="mr-1.5" /> : <FiChevronDown size={14} className="mr-1.5" />}

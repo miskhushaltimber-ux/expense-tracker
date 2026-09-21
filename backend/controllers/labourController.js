@@ -9,6 +9,7 @@ import {
 import { listLocationsByUser, createLocation, renameLocation, deleteLocation } from "../models/locationStore.js";
 import { storeFieldFile, deleteStoredFile } from "../utils/fileStorage.js";
 import { logAction } from "../utils/auditLog.js";
+import { parseCustomFields, serializeCustomFields } from "../utils/customFields.js";
 
 const DOC_FIELDS = ["aadharFile", "panFile", "greenCardFile"];
 const removeFlagFor = (field) => `remove${field.charAt(0).toUpperCase()}${field.slice(1)}`;
@@ -112,6 +113,12 @@ const makeSimpleHandlers = ({ listByUser, create, updateById, deleteById, fields
       }
       try {
         const values = Object.fromEntries(fields.map((f) => [f, req.body[f]]));
+        // customFields (21 Sep, custom-columns feature) — arrives as a JSON
+        // string here too (this request is also multipart/form-data, see
+        // toFormData in the frontend's api/labour.js); parseCustomFields
+        // tolerates that, serializeCustomFields then sanitizes it for
+        // storage, same split expenseController.js uses.
+        if (fields.includes("customFields")) values.customFields = serializeCustomFields(parseCustomFields(req.body.customFields));
         const entity = await create({ userId: req.user.companyId, ...values });
         logFor(req, "created", label.toLowerCase(), describe(entity));
         res.status(201).json(entity);
@@ -123,6 +130,15 @@ const makeSimpleHandlers = ({ listByUser, create, updateById, deleteById, fields
       try {
         const updates = {};
         for (const f of fields) if (req.body[f] !== undefined) updates[f] = req.body[f];
+        // A customFields patch is merged onto this row's EXISTING custom
+        // values (one extra read), not a wholesale replace — a cell edit
+        // only ever sends the one column that changed, same reasoning as
+        // expenseStore.js's updateExpenseById.
+        if (fields.includes("customFields") && req.body.customFields !== undefined) {
+          const existingList = await listByUser(req.user.companyId);
+          const existing = existingList.find((e) => (e._id || e.id) === req.params.id);
+          updates.customFields = serializeCustomFields({ ...(existing?.customFields || {}), ...parseCustomFields(req.body.customFields) });
+        }
         const { entity, error } = await updateById(req.params.id, req.user.companyId, updates);
         if (error === "not_found") return res.status(404).json({ message: `${label} not found` });
         if (error === "forbidden") return res.status(403).json({ message: `Not authorized to update this ${label.toLowerCase()}` });
@@ -163,12 +179,12 @@ const laborHandlers = makePersonHandlers({
 // owner-only, not add/update/delete).
 const wageEntryHandlers = makeSimpleHandlers({
   listByUser: listWageEntriesByUser, create: createWageEntry, updateById: updateWageEntryById, deleteById: deleteWageEntryById,
-  fields: ["contractorId", "dateLabel", "cft", "rate"], required: ["contractorId", "dateLabel"], label: "Wage entry",
+  fields: ["contractorId", "dateLabel", "cft", "rate", "customFields"], required: ["contractorId", "dateLabel"], label: "Wage entry",
   labelFor: (e) => `${e.dateLabel || ""} — ${e.cft || 0} CFT`.trim(),
 });
 const paymentHandlers = makeSimpleHandlers({
   listByUser: listPaymentsByUser, create: createPayment, updateById: updatePaymentById, deleteById: deletePaymentById,
-  fields: ["contractorId", "date", "label", "amount"], required: ["contractorId", "date"], label: "Payment",
+  fields: ["contractorId", "date", "label", "amount", "customFields"], required: ["contractorId", "date"], label: "Payment",
   labelFor: (p) => `${p.label || "Payment"} — ₹${p.amount || 0}`,
 });
 

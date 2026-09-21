@@ -15,6 +15,7 @@ import masterRoutes from "./routes/masterRoutes.js";
 import labourRoutes from "./routes/labourRoutes.js";
 import labourSheetsRoutes from "./routes/labourSheetsRoutes.js";
 import teamRoutes from "./routes/teamRoutes.js";
+import columnDefRoutes from "./routes/columnDefRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isFirestoreConfigured } from "./utils/firestoreClient.js";
 import { runMigration } from "./scripts/migrateSheetsToFirestore.js";
@@ -33,6 +34,7 @@ import {
 } from "./models/labourStore.js";
 import { ensureLocationsSheet } from "./models/locationStore.js";
 import { ensureAuditLogSheet } from "./utils/auditLog.js";
+import { ensureColumnDefsSheet } from "./models/columnDefStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,6 +91,7 @@ app.use("/api/masters", masterRoutes);
 app.use("/api/labour", labourRoutes);
 app.use("/api/labour-sheets", labourSheetsRoutes);
 app.use("/api/team", teamRoutes);
+app.use("/api/columns", columnDefRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
@@ -134,8 +137,9 @@ app.listen(PORT, async () => {
         ensurePaymentsSheet(),
         ensureLocationsSheet(),
         ensureAuditLogSheet(),
+        ensureColumnDefsSheet(),
       ]);
-      console.log("✅ Firestore database ready (Users + Companies + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments + Locations + AuditLog)");
+      console.log("✅ Firestore database ready (Users + Companies + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments + Locations + AuditLog + ColumnDefs)");
     } catch (error) {
       console.error("❌ Couldn't prepare the Firestore database:", error.message);
     }

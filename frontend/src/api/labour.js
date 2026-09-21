@@ -11,6 +11,12 @@ const toFormData = (data) => {
       if (value) formData.append(fileFields[key], value);
       return;
     }
+    if (key === "customFields") {
+      // 21 Sep, custom-columns feature — same JSON-over-multipart trick as
+      // api/expenses.js, since a plain object can't ride in a form field.
+      if (value && Object.keys(value).length) formData.append("customFields", JSON.stringify(value));
+      return;
+    }
     if (value !== undefined && value !== null) formData.append(key, value);
   });
   return formData;

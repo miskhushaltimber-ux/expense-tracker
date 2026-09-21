@@ -18,6 +18,7 @@
 // makeStore), which just needs each sheet's headers and a row->entity mapper.
 import crypto from "crypto";
 import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, updateRowsAt, deleteRowAt, deleteRowsAt } from "../utils/firestoreDb.js";
+import { parseCustomFields } from "../utils/customFields.js";
 
 const SHEETS = {
   mills: "Mills",
@@ -34,11 +35,14 @@ const HEADERS = {
   labors: ["id", "userId", "contractorId", "name", "mobile", ...DOC_HEADERS, "createdAt", "updatedAt"],
   // dateLabel is free text ("22-06 TO 27-06") rather than a real date, same
   // as sir's paper sheet — a CFT batch usually spans several days, not one.
-  wageEntries: ["id", "userId", "contractorId", "dateLabel", "cft", "rate", "createdAt", "updatedAt"],
+  // customFields (21 Sep, custom-columns feature) holds this row's values
+  // for whatever extra columns have been added to this ledger — see
+  // utils/customFields.js.
+  wageEntries: ["id", "userId", "contractorId", "dateLabel", "cft", "rate", "createdAt", "updatedAt", "customFields"],
   // label is free text too ("CASH/ADV", "S&E", "RTGS", ...) rather than a
   // fixed set — the paper sheet uses several abbreviations sir didn't
   // define, and locking them to an enum risks guessing his terms wrong.
-  payments: ["id", "userId", "contractorId", "date", "label", "amount", "createdAt", "updatedAt"],
+  payments: ["id", "userId", "contractorId", "date", "label", "amount", "createdAt", "updatedAt", "customFields"],
 };
 
 export const ensureMillsSheet = () => ensureSheetTab(SHEETS.mills, HEADERS.mills);
@@ -91,6 +95,7 @@ const toWageEntry = (row) => {
     amount: cft * rate,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    customFields: parseCustomFields(row.customFields),
   };
 };
 
@@ -103,6 +108,7 @@ const toPayment = (row) => ({
   amount: num(row.amount),
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+  customFields: parseCustomFields(row.customFields),
 });
 
 // Fully generic: given a sheet's headers and its row->entity mapper, every

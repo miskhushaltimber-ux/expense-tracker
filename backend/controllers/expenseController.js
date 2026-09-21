@@ -8,6 +8,7 @@ import {
 } from "../models/expenseStore.js";
 import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
 import { logAction } from "../utils/auditLog.js";
+import { parseCustomFields } from "../utils/customFields.js";
 
 // 19 Sep, multi-user accounts: every list/create/update/delete below is now
 // scoped by req.user.companyId (the shared account), not req.user.id (the
@@ -35,6 +36,10 @@ export const addExpense = async (req, res) => {
       vehicleId,
       litres,
       odometer,
+      // 21 Sep, custom-columns feature. Arrives as a JSON string here since
+      // this request is multipart/form-data (see toFormData in the
+      // frontend's api/expenses.js) — parseCustomFields tolerates that.
+      customFields: parseCustomFields(req.body.customFields),
     });
     logAction({
       companyId: req.user.companyId,
@@ -114,6 +119,7 @@ export const updateExpense = async (req, res) => {
     if (vehicleId !== undefined) updates.vehicleId = vehicleId;
     if (litres !== undefined) updates.litres = litres;
     if (odometer !== undefined) updates.odometer = odometer;
+    if (req.body.customFields !== undefined) updates.customFields = parseCustomFields(req.body.customFields);
 
     // Two different things can happen to a bill: a new file replaces it, or
     // the user detaches it outright (the × in the Bill column). Both need the
