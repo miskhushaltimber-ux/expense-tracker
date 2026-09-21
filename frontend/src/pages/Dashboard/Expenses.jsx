@@ -69,6 +69,168 @@ const formatCurrency = (amount) =>
 // instead of doing nothing/submitting immediately.
 const FIELD_ORDER = ["date", "expense", "amount", "master"];
 
+// Draft row, isolated into its own component (21 Sep, per Rishi: "it is
+// lagging way too much when i enter any data in it"). `draft` state used to
+// live in the Expenses component itself, right next to the full `rows` list
+// (potentially hundreds of entries by now) — every keystroke re-rendered the
+// WHOLE sheet, existing rows included, which is what got slower as the sheet
+// grew. Typing now only re-renders this one row; the rest of the sheet is
+// completely untouched by it. `cellRefs`/`handleCellKeyDown`/`focusCell` stay
+// in the parent since existing rows share that same Tab/Enter-navigation
+// mechanism — only the draft's own state and commit logic moved.
+const DraftRow = ({
+  masters,
+  masterCatalog,
+  reloadAfterMasterChange,
+  customColumns,
+  renderBudgetCell,
+  rows,
+  vehicles,
+  setRows,
+  askForVehicle,
+  setCellRef,
+  handleCellKeyDown,
+  focusCell,
+}) => {
+  const [draft, setDraft] = useState(emptyDraft());
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  const handleDraftChange = (field, value) => setDraft((d) => ({ ...d, [field]: value }));
+  const handleDraftCustomFieldChange = (colDef, value) => {
+    setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
+  };
+
+  const commitDraftIfReady = async () => {
+    if (!draft.expense.trim() || !draft.amount || !draft.master.trim()) return;
+
+    // Same money, same day, same master as something already in the sheet —
+    // usually a re-entry rather than a genuine second spend.
+    const duplicate = findPossibleDuplicate(draft, rows);
+    if (duplicate) {
+      const vehicleName = duplicate.vehicleId
+        ? vehicles.find((v) => v._id === duplicate.vehicleId)?.name
+        : null;
+      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
+    }
+
+    // A vehicle-shaped expense typed here would otherwise never reach the
+    // vehicle totals, and would likely get entered a second time on the
+    // Vehicles page. Offer to tag it now so it's only ever entered once.
+    let vehicleId;
+    if (vehicles.length > 0 && looksLikeVehicleExpense(draft)) {
+      vehicleId = await askForVehicle(draft);
+      if (vehicleId === "cancelled") return;
+    }
+
+    try {
+      setSavingDraft(true);
+      const saved = await addExpense({
+        date: draft.date,
+        expense: draft.expense.trim(),
+        amount: Number(draft.amount),
+        master: draft.master.trim(),
+        bill: draft.billFileObj || undefined,
+        vehicleId: vehicleId || undefined,
+        customFields: draft.customFields,
+      });
+      setRows((prev) => [saved, ...prev]);
+      setDraft(emptyDraft());
+      notifySuccess("Row added");
+      focusCell("draft", "date");
+    } catch (err) {
+      notifyError(err.message || "Failed to add row");
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  return (
+    <tr className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
+      <td className="px-3 py-2"></td>
+      <td className="px-2 py-2">
+        <input
+          ref={setCellRef("draft", "date")}
+          type="date"
+          value={draft.date}
+          onChange={(e) => handleDraftChange("date", e.target.value)}
+          onKeyDown={(e) => handleCellKeyDown(e, "draft", "date", { isDraft: true, onCommit: commitDraftIfReady })}
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <input
+          ref={setCellRef("draft", "expense")}
+          type="text"
+          value={draft.expense}
+          onChange={(e) => handleDraftChange("expense", e.target.value)}
+          onBlur={commitDraftIfReady}
+          onKeyDown={(e) => handleCellKeyDown(e, "draft", "expense", { isDraft: true, onCommit: commitDraftIfReady })}
+          placeholder="E.g., Diesel for delivery truck"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <input
+          ref={setCellRef("draft", "amount")}
+          type="number"
+          value={draft.amount}
+          onChange={(e) => handleDraftChange("amount", e.target.value)}
+          onBlur={commitDraftIfReady}
+          onKeyDown={(e) => handleCellKeyDown(e, "draft", "amount", { isDraft: true, onCommit: commitDraftIfReady })}
+          placeholder="0"
+          min="0"
+          step="0.01"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <MasterAutocomplete
+          inputRef={setCellRef("draft", "master")}
+          value={draft.master}
+          masters={masters}
+          catalog={masterCatalog}
+          onCatalogChange={reloadAfterMasterChange}
+          onChange={(value) => handleDraftChange("master", value)}
+          onBlur={commitDraftIfReady}
+          onKeyDown={(e) => handleCellKeyDown(e, "draft", "master", { isDraft: true, onCommit: commitDraftIfReady })}
+          placeholder="E.g., Fuel"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        {renderBudgetCell(draft.master)}
+      </td>
+      {customColumns.map((col) => (
+        <td key={col._id} className="px-2 py-2">
+          <CustomCell
+            colDef={col}
+            value={draft.customFields?.[col.key]}
+            onChange={(value) => handleDraftCustomFieldChange(col, value)}
+          />
+        </td>
+      ))}
+      <td className="px-2 py-2 text-center">
+        <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
+          <FiPaperclip size={16} className={draft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            className="hidden"
+            onChange={(e) => handleDraftChange("billFileObj", e.target.files?.[0] || null)}
+          />
+        </label>
+      </td>
+      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
+        {savingDraft ? (
+          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
+        ) : (
+          <FiPlus size={16} className="mx-auto" />
+        )}
+      </td>
+    </tr>
+  );
+};
+
 const Expenses = () => {
   const [rows, setRows] = useState([]);
   const [vehicles, setVehicles] = useState([]);
@@ -78,8 +240,6 @@ const Expenses = () => {
   // the suggestion matching needs, and every other caller expects it.
   const [masterCatalog, setMasterCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [draft, setDraft] = useState(emptyDraft());
-  const [savingDraft, setSavingDraft] = useState(false);
   // Custom columns (21 Sep) — this sheet's column set, shared with the
   // Vehicle Expense Sheet since both read/write the same Expenses rows.
   const [customColumns, setCustomColumns] = useState([]);
@@ -173,14 +333,18 @@ const Expenses = () => {
     cellRefs.current[`${rowKey}:${field}`]?.focus();
   };
 
-  const handleCellKeyDown = (e, rowKey, field, { isDraft }) => {
+  // `onCommit` is DraftRow's own local commitDraftIfReady, passed through on
+  // each call (21 Sep — commit logic moved into DraftRow itself so typing
+  // stays isolated there; this function only knows about field-to-field
+  // navigation, not what "committing" means for whichever row called it).
+  const handleCellKeyDown = (e, rowKey, field, { isDraft, onCommit } = {}) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
     const idx = FIELD_ORDER.indexOf(field);
     if (idx < FIELD_ORDER.length - 1) {
       focusCell(rowKey, FIELD_ORDER[idx + 1]);
     } else if (isDraft) {
-      commitDraftIfReady();
+      onCommit?.();
     } else {
       e.target.blur(); // triggers the existing row's onBlur -> saveRow
     }
@@ -349,10 +513,6 @@ const Expenses = () => {
     saveCustomField(id, colDef.key, row?.customFields?.[colDef.key]);
   };
 
-  const handleDraftCustomFieldChange = (colDef, value) => {
-    setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
-  };
-
   const handleRowBillChange = async (id, file) => {
     if (!file) return;
     try {
@@ -383,53 +543,6 @@ const Expenses = () => {
       notifySuccess("Row deleted");
     } catch (err) {
       notifyError(err.message || "Failed to delete row");
-    }
-  };
-
-  // --- New-row draft: fills in like a spreadsheet, saves once the key fields are there ---
-  const handleDraftChange = (field, value) => setDraft((d) => ({ ...d, [field]: value }));
-
-  const commitDraftIfReady = async () => {
-    if (!draft.expense.trim() || !draft.amount || !draft.master.trim()) return;
-
-    // Same money, same day, same master as something already in the sheet —
-    // usually a re-entry rather than a genuine second spend.
-    const duplicate = findPossibleDuplicate(draft, rows);
-    if (duplicate) {
-      const vehicleName = duplicate.vehicleId
-        ? vehicles.find((v) => v._id === duplicate.vehicleId)?.name
-        : null;
-      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
-    }
-
-    // A vehicle-shaped expense typed here would otherwise never reach the
-    // vehicle totals, and would likely get entered a second time on the
-    // Vehicles page. Offer to tag it now so it's only ever entered once.
-    let vehicleId;
-    if (vehicles.length > 0 && looksLikeVehicleExpense(draft)) {
-      vehicleId = await askForVehicle(draft);
-      if (vehicleId === "cancelled") return;
-    }
-
-    try {
-      setSavingDraft(true);
-      const saved = await addExpense({
-        date: draft.date,
-        expense: draft.expense.trim(),
-        amount: Number(draft.amount),
-        master: draft.master.trim(),
-        bill: draft.billFileObj || undefined,
-        vehicleId: vehicleId || undefined,
-        customFields: draft.customFields,
-      });
-      setRows((prev) => [saved, ...prev]);
-      setDraft(emptyDraft());
-      notifySuccess("Row added");
-      focusCell("draft", "date");
-    } catch (err) {
-      notifyError(err.message || "Failed to add row");
-    } finally {
-      setSavingDraft(false);
     }
   };
 
@@ -952,89 +1065,20 @@ const Expenses = () => {
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {/* Draft row — always present at the top for fast entry, regardless of search/grouping */}
-                  <tr className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
-                    <td className="px-3 py-2"></td>
-                    <td className="px-2 py-2">
-                      <input
-                        ref={setCellRef("draft", "date")}
-                        type="date"
-                        value={draft.date}
-                        onChange={(e) => handleDraftChange("date", e.target.value)}
-                        onKeyDown={(e) => handleCellKeyDown(e, "draft", "date", { isDraft: true })}
-                        className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        ref={setCellRef("draft", "expense")}
-                        type="text"
-                        value={draft.expense}
-                        onChange={(e) => handleDraftChange("expense", e.target.value)}
-                        onBlur={commitDraftIfReady}
-                        onKeyDown={(e) => handleCellKeyDown(e, "draft", "expense", { isDraft: true })}
-                        placeholder="E.g., Diesel for delivery truck"
-                        className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        ref={setCellRef("draft", "amount")}
-                        type="number"
-                        value={draft.amount}
-                        onChange={(e) => handleDraftChange("amount", e.target.value)}
-                        onBlur={commitDraftIfReady}
-                        onKeyDown={(e) => handleCellKeyDown(e, "draft", "amount", { isDraft: true })}
-                        placeholder="0"
-                        min="0"
-                        step="0.01"
-                        className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <MasterAutocomplete
-                        inputRef={setCellRef("draft", "master")}
-                        value={draft.master}
-                        masters={masters}
-                        catalog={masterCatalog}
-                        onCatalogChange={reloadAfterMasterChange}
-                        onChange={(value) => handleDraftChange("master", value)}
-                        onBlur={commitDraftIfReady}
-                        onKeyDown={(e) => handleCellKeyDown(e, "draft", "master", { isDraft: true })}
-                        placeholder="E.g., Fuel"
-                        className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      {renderBudgetCell(draft.master)}
-                    </td>
-                    {customColumns.map((col) => (
-                      <td key={col._id} className="px-2 py-2">
-                        <CustomCell
-                          colDef={col}
-                          value={draft.customFields?.[col.key]}
-                          onChange={(value) => handleDraftCustomFieldChange(col, value)}
-                        />
-                      </td>
-                    ))}
-                    <td className="px-2 py-2 text-center">
-                      <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
-                        <FiPaperclip size={16} className={draft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
-                        <input
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp,application/pdf"
-                          className="hidden"
-                          onChange={(e) => handleDraftChange("billFileObj", e.target.files?.[0] || null)}
-                        />
-                      </label>
-                    </td>
-                    <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
-                      {savingDraft ? (
-                        <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
-                      ) : (
-                        <FiPlus size={16} className="mx-auto" />
-                      )}
-                    </td>
-                  </tr>
+                  <DraftRow
+                    masters={masters}
+                    masterCatalog={masterCatalog}
+                    reloadAfterMasterChange={reloadAfterMasterChange}
+                    customColumns={customColumns}
+                    renderBudgetCell={renderBudgetCell}
+                    rows={rows}
+                    vehicles={vehicles}
+                    setRows={setRows}
+                    askForVehicle={askForVehicle}
+                    setCellRef={setCellRef}
+                    handleCellKeyDown={handleCellKeyDown}
+                    focusCell={focusCell}
+                  />
 
                   {filteredRows.length === 0 && !loading && (
                     <tr>

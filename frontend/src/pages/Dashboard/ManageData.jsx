@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FiPaperclip, FiX, FiTrash2, FiHome, FiUsers, FiUser, FiTruck, FiFilter, FiXCircle, FiPlus, FiChevronDown, FiChevronRight, FiMapPin } from "react-icons/fi";
+import { FiPaperclip, FiX, FiTrash2, FiHome, FiUsers, FiUser, FiTruck, FiFilter, FiXCircle, FiPlus, FiChevronDown, FiChevronRight, FiMapPin, FiSearch } from "react-icons/fi";
 import {
   fetchLocations,
   addLocation,
@@ -106,6 +106,16 @@ const DOC_COLUMNS = [
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// Contractor "Master" (21 Sep, per Rishi: "add master in the manage data in
+// contractor details so we can give them master like MILL THEKEDAR, REPSO
+// THEKEDAR, BUNDLE THEKEDAR etc") — a free-typed category tag per contractor,
+// stored as contractorType. NOT the same thing as the Masters catalog on the
+// Expense Sheet (expense categories) — same word, unrelated feature; called
+// "Master" here only because that's Rishi's own term for it. Presets seed the
+// suggestion list; typing anything else just works, so the list can grow the
+// same way the Expense Sheet's Masters do.
+const CONTRACTOR_TYPE_PRESETS = ["MILL THEKEDAR", "REPSO THEKEDAR", "BUNDLE THEKEDAR"];
+
 // Same "commit only once focus truly leaves the row" fix shipped for the
 // Labor Wages draft rows (18 Sep) — reused here for every draft row on this
 // page, since they all have the same shape (name + a parent picker, maybe
@@ -171,6 +181,7 @@ const PersonManager = ({
   showMobile = true,
   showDocs = true,
   showOpeningBalance = false,
+  showMasterType = false, // Contractors only — see CONTRACTOR_TYPE_PRESETS above
   emptyText,
   // Staff (19 Sep, multi-user accounts) see this data but can't add, rename,
   // reassign, attach documents to, or delete it — it's shared reference data
@@ -182,6 +193,7 @@ const PersonManager = ({
     mobile: "",
     ...(parent ? { [parent.field]: "" } : {}),
     openingBalance: "",
+    contractorType: "",
     aadharFileObj: null,
     panFileObj: null,
     greenCardFileObj: null,
@@ -190,6 +202,26 @@ const PersonManager = ({
   const [adding, setAdding] = useState(false);
   const nameRef = useRef(null);
   const rowRef = useRef(null);
+
+  // Search (21 Sep, per Rishi: "add search button in the manage data cause
+  // we added mills") — filters by name, mobile and whatever the parent picker
+  // shows (mill name, location, etc.), client-side since these lists are
+  // small. Doesn't affect the draft row.
+  const [search, setSearch] = useState("");
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((row) => {
+      const parentLabel = parent ? parent.options.find((o) => o.value === row[parent.field])?.label || "" : "";
+      return `${row.name || ""} ${row.mobile || ""} ${parentLabel} ${row.contractorType || ""}`.toLowerCase().includes(q);
+    });
+  }, [rows, search, parent]);
+
+  const masterTypeSuggestions = useMemo(() => {
+    if (!showMasterType) return [];
+    const fromRows = rows.map((r) => r.contractorType).filter(Boolean);
+    return [...new Set([...CONTRACTOR_TYPE_PRESETS, ...fromRows])];
+  }, [rows, showMasterType]);
 
   const commitDraft = async () => {
     if (!draft.name.trim() || (parent && !draft[parent.field]) || adding) return;
@@ -214,17 +246,45 @@ const PersonManager = ({
     }
   };
 
-  const colCount = 1 + (parent ? 1 : 0) + (showMobile ? 1 : 0) + (showDocs ? 3 : 0) + (showOpeningBalance ? 1 : 0) + 1;
+  const colCount =
+    1 + (parent ? 1 : 0) + (showMobile ? 1 : 0) + (showMasterType ? 1 : 0) + (showDocs ? 3 : 0) + (showOpeningBalance ? 1 : 0) + 1;
 
   return (
-    <table className="w-full border-collapse">
+    <div>
+      {rows.length > 0 && (
+        <div className="relative px-3 pt-3 pb-1 max-w-xs">
+          <FiSearch className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={13} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search…"
+            className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+      )}
+      {showMasterType && (
+        <datalist id="contractor-type-suggestions">
+          {masterTypeSuggestions.map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
+      )}
+      <table className="w-full border-collapse">
       <thead>
         <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
           {parent && <th className="px-3 py-2 font-medium">{parent.label}</th>}
           <th className="px-3 py-2 font-medium">Name</th>
           {showMobile && <th className="px-3 py-2 font-medium">Mobile</th>}
+          {showMasterType && <th className="px-3 py-2 font-medium">Master</th>}
           {showDocs && DOC_COLUMNS.map((d) => <th key={d.objField} className="px-3 py-2 font-medium">{d.label}</th>)}
-          {showOpeningBalance && <th className="px-3 py-2 font-medium">Opening Bal.</th>}
+          {showOpeningBalance && (
+            <th
+              className="px-3 py-2 font-medium"
+              title="+ = you gave them (they owe you). − = you owe them."
+            >
+              Opening Bal.
+            </th>
+          )}
           <th className="px-3 py-2"></th>
         </tr>
       </thead>
@@ -268,6 +328,19 @@ const PersonManager = ({
               />
             </td>
           )}
+          {showMasterType && (
+            <td className="px-3 py-2">
+              <input
+                list="contractor-type-suggestions"
+                value={draft.contractorType}
+                onChange={(e) => setDraft((d) => ({ ...d, contractorType: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && commitDraft()}
+                placeholder="e.g. MILL THEKEDAR"
+                disabled={adding}
+                className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
+            </td>
+          )}
           {showDocs &&
             DOC_COLUMNS.map(({ objField, label }) => (
               <td key={objField} className="px-3 py-2">
@@ -285,7 +358,8 @@ const PersonManager = ({
                 type="number"
                 value={draft.openingBalance}
                 onChange={(e) => setDraft((d) => ({ ...d, openingBalance: e.target.value }))}
-                placeholder="0"
+                placeholder="+/- 0"
+                title="+ = you gave them (they owe you). − = you owe them."
                 className="w-24 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
               />
             </td>
@@ -293,16 +367,23 @@ const PersonManager = ({
           <td className="px-3 py-2"></td>
         </tr>
         )}
-
-        {rows.length === 0 && (
+        {showOpeningBalance && (
           <tr>
-            <td colSpan={colCount} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
-              {readOnly ? "Nothing here yet." : emptyText}
+            <td colSpan={colCount} className="px-3 pb-2 pt-0.5 text-xs text-gray-400 dark:text-gray-500">
+              + = you gave them (they owe you) &nbsp;·&nbsp; − = you owe them
             </td>
           </tr>
         )}
 
-        {rows.map((row) => (
+        {filteredRows.length === 0 && (
+          <tr>
+            <td colSpan={colCount} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
+              {readOnly ? "Nothing here yet." : rows.length === 0 ? emptyText : "No matches for your search."}
+            </td>
+          </tr>
+        )}
+
+        {filteredRows.map((row) => (
           <tr key={row._id} className="border-b border-gray-100 dark:border-gray-800">
             {parent &&
               (readOnly ? (
@@ -350,6 +431,22 @@ const PersonManager = ({
                   />
                 </td>
               ))}
+            {showMasterType &&
+              (readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{row.contractorType || "—"}</td>
+              ) : (
+                <td className="px-3 py-2">
+                  <input
+                    key={`${row._id}-type`}
+                    list="contractor-type-suggestions"
+                    defaultValue={row.contractorType}
+                    onBlur={(e) => e.target.value !== (row.contractorType || "") && saveField(row._id, "contractorType", e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    placeholder="e.g. MILL THEKEDAR"
+                    className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  />
+                </td>
+              ))}
             {showDocs &&
               DOC_COLUMNS.map(({ objField, storedField, label }) => (
                 <td key={objField} className="px-3 py-2">
@@ -386,7 +483,8 @@ const PersonManager = ({
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </div>
   );
 };
 
@@ -975,6 +1073,7 @@ const ManageData = () => {
             options: mills.map((m) => ({ value: m._id, label: `${m.name} (${m.location})` })),
           }}
           showOpeningBalance
+          showMasterType
           emptyText={mills.length === 0 ? "Add a mill above first." : "No contractors yet — pick a mill and type a name above."}
           readOnly={isStaff}
         />

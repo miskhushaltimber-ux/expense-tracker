@@ -101,6 +101,204 @@ const TABS = [
   { key: "report", label: "Report" },
 ];
 
+// Draft row, isolated into its own component (21 Sep, per Rishi: "it is
+// lagging way too much when i enter any data in it"). Same fix as the main
+// Expense Sheet: `expenseDraft` state used to live in the Vehicles component
+// itself, right next to the full `expenses` list — every keystroke re-rendered
+// the WHOLE sheet, existing rows included. Typing now only re-renders this
+// one row. `expenseCellRefs`/`handleExpenseCellKeyDown`/`focusExpenseCell`
+// stay in the parent since existing rows share that same Tab/Enter-navigation
+// mechanism — only the draft's own state, blur-commit and custom-field-change
+// logic moved.
+const ExpenseDraftRow = ({
+  vehicles,
+  masters,
+  masterCatalog,
+  reloadAfterMasterChange,
+  customColumns,
+  expenses,
+  vehiclesById,
+  setExpenses,
+  setExpenseCellRef,
+  handleExpenseCellKeyDown,
+  focusExpenseCell,
+}) => {
+  const [expenseDraft, setExpenseDraft] = useState(emptyExpenseDraft());
+  const [savingExpenseDraft, setSavingExpenseDraft] = useState(false);
+  const setExpenseDraftField = (field, value) => setExpenseDraft((d) => ({ ...d, [field]: value }));
+  const handleDraftCustomFieldChange = (colDef, value) => {
+    setExpenseDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
+  };
+
+  // Master's field used to commit on its OWN blur, same bug class fixed
+  // elsewhere in the app: for a fuel master, Litres comes right after
+  // Master, so clicking from Master into Litres fired the save before
+  // Litres/Odometer were ever typed — silently dropping data the fuel-cheat
+  // detection depends on. Fixed 18 Sep by moving the commit to the row
+  // itself, checked a tick after blur (real focus, not the field's own
+  // blur event) — same fix as Labor Wages / Manage Data's useRowCommit.
+  const expenseDraftRowRef = useRef(null);
+  const handleExpenseDraftRowBlur = () => {
+    setTimeout(() => {
+      if (expenseDraftRowRef.current && !expenseDraftRowRef.current.contains(document.activeElement)) {
+        commitExpenseDraftIfReady();
+      }
+    }, 0);
+  };
+
+  const commitExpenseDraftIfReady = async () => {
+    if (!expenseDraft.vehicleId || !expenseDraft.expense.trim() || !expenseDraft.amount || !expenseDraft.master.trim()) return;
+
+    // Checked against EVERY expense, not just vehicle-tagged ones — the common
+    // mistake is the same spend already sitting untagged on the main sheet.
+    const duplicate = findPossibleDuplicate(expenseDraft, expenses);
+    if (duplicate) {
+      const vehicleName = duplicate.vehicleId ? vehiclesById.get(duplicate.vehicleId)?.name : null;
+      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
+    }
+
+    try {
+      setSavingExpenseDraft(true);
+      const saved = await addExpense({
+        date: expenseDraft.date,
+        expense: expenseDraft.expense.trim(),
+        amount: Number(expenseDraft.amount),
+        master: expenseDraft.master.trim(),
+        bill: expenseDraft.billFileObj || undefined,
+        vehicleId: expenseDraft.vehicleId,
+        litres: isFuelMaster(expenseDraft.master) ? expenseDraft.litres : "",
+        odometer: isFuelMaster(expenseDraft.master) ? expenseDraft.odometer : "",
+        customFields: expenseDraft.customFields,
+      });
+      setExpenses((prev) => [saved, ...prev]);
+      // Keep the vehicle selected — logging several expenses for the same
+      // truck in a row is the common case, so only the rest of the row resets.
+      setExpenseDraft({ ...emptyExpenseDraft(), vehicleId: expenseDraft.vehicleId });
+      notifySuccess("Expense added");
+      focusExpenseCell("draft", "expense");
+    } catch (err) {
+      notifyError(err.message || "Failed to add expense");
+    } finally {
+      setSavingExpenseDraft(false);
+    }
+  };
+
+  return (
+    <tr ref={expenseDraftRowRef} onBlur={handleExpenseDraftRowBlur} className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
+      <td className="px-3 py-2"></td>
+      <td className="px-2 py-2">
+        <input
+          ref={setExpenseCellRef("draft", "date")}
+          type="date"
+          value={expenseDraft.date}
+          onChange={(e) => setExpenseDraftField("date", e.target.value)}
+          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "date", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <select
+          ref={setExpenseCellRef("draft", "vehicleId")}
+          value={expenseDraft.vehicleId}
+          onChange={(e) => setExpenseDraftField("vehicleId", e.target.value)}
+          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "vehicleId", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-gray-800"
+        >
+          <option value="" disabled>
+            Select vehicle
+          </option>
+          {vehicles.map((v) => (
+            <option key={v._id} value={v._id}>
+              {v.name}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td className="px-2 py-2">
+        <input
+          ref={setExpenseCellRef("draft", "expense")}
+          type="text"
+          value={expenseDraft.expense}
+          onChange={(e) => setExpenseDraftField("expense", e.target.value)}
+          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "expense", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+          placeholder="E.g., Diesel refill"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <input
+          ref={setExpenseCellRef("draft", "amount")}
+          type="number"
+          value={expenseDraft.amount}
+          onChange={(e) => setExpenseDraftField("amount", e.target.value)}
+          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "amount", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+          placeholder="0"
+          min="0"
+          step="0.01"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        <MasterAutocomplete
+          inputRef={setExpenseCellRef("draft", "master")}
+          value={expenseDraft.master}
+          masters={masters}
+          catalog={masterCatalog}
+          onCatalogChange={reloadAfterMasterChange}
+          onChange={(value) => setExpenseDraftField("master", value)}
+          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "master", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+          placeholder="E.g., Fuel & Diesel"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+        />
+      </td>
+      <td className="px-2 py-2">
+        {isFuelMaster(expenseDraft.master) ? (
+          <input
+            ref={setExpenseCellRef("draft", "litres")}
+            type="number"
+            value={expenseDraft.litres}
+            onChange={(e) => setExpenseDraftField("litres", e.target.value)}
+            onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "litres", { isDraft: true, onCommit: commitExpenseDraftIfReady })}
+            placeholder="0"
+            min="0"
+            step="0.01"
+            className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        ) : (
+          <span className="block text-center text-gray-300 dark:text-gray-500 text-sm">—</span>
+        )}
+      </td>
+      {customColumns.map((col) => (
+        <td key={col._id} className="px-2 py-2">
+          <CustomCell
+            colDef={col}
+            value={expenseDraft.customFields?.[col.key]}
+            onChange={(value) => handleDraftCustomFieldChange(col, value)}
+          />
+        </td>
+      ))}
+      <td className="px-2 py-2 text-center">
+        <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
+          <FiPaperclip size={16} className={expenseDraft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            className="hidden"
+            onChange={(e) => setExpenseDraftField("billFileObj", e.target.files?.[0] || null)}
+          />
+        </label>
+      </td>
+      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
+        {savingExpenseDraft ? (
+          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
+        ) : (
+          <FiPlus size={16} className="mx-auto" />
+        )}
+      </td>
+    </tr>
+  );
+};
+
 const Vehicles = () => {
   const [vehicles, setVehicles] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -117,8 +315,6 @@ const Vehicles = () => {
   const [tab, setTab] = useState("sheet");
 
   // --- Vehicle Expense Sheet state (one consolidated sheet, all vehicles) ---
-  const [expenseDraft, setExpenseDraft] = useState(emptyExpenseDraft());
-  const [savingExpenseDraft, setSavingExpenseDraft] = useState(false);
   // Custom columns (21 Sep) — shares its column set with the main Expense
   // Sheet since this tab reads/writes the same Expenses rows (sheetKey
   // "expenses" — see backend/models/columnDefStore.js).
@@ -181,7 +377,11 @@ const Vehicles = () => {
   const focusExpenseCell = (rowKey, field) => {
     expenseCellRefs.current[`${rowKey}:${field}`]?.focus();
   };
-  const handleExpenseCellKeyDown = (e, rowKey, field, { isDraft }) => {
+  // `onCommit` is the draft row's own local commitExpenseDraftIfReady,
+  // passed through by whichever row called this (21 Sep — draft state moved
+  // into its own component so typing stays isolated from the rest of the
+  // sheet; this function only knows about field-to-field navigation).
+  const handleExpenseCellKeyDown = (e, rowKey, field, { isDraft, onCommit } = {}) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
     const idx = EXPENSE_FIELD_ORDER.indexOf(field);
@@ -199,7 +399,7 @@ const Vehicles = () => {
     if (nextIdx < EXPENSE_FIELD_ORDER.length) {
       focusExpenseCell(rowKey, EXPENSE_FIELD_ORDER[nextIdx]);
     } else if (isDraft) {
-      commitExpenseDraftIfReady();
+      onCommit?.();
     } else {
       e.target.blur();
     }
@@ -545,61 +745,6 @@ const Vehicles = () => {
   };
 
   // ================= Consolidated Vehicle Expense Sheet =================
-  const setExpenseDraftField = (field, value) => setExpenseDraft((d) => ({ ...d, [field]: value }));
-
-  // Master's field used to commit on its OWN blur, same bug class fixed
-  // elsewhere in the app: for a fuel master, Litres comes right after
-  // Master, so clicking from Master into Litres fired the save before
-  // Litres/Odometer were ever typed — silently dropping data the fuel-cheat
-  // detection depends on. Fixed 18 Sep by moving the commit to the row
-  // itself, checked a tick after blur (real focus, not the field's own
-  // blur event) — same fix as Labor Wages / Manage Data's useRowCommit.
-  const expenseDraftRowRef = useRef(null);
-  const handleExpenseDraftRowBlur = () => {
-    setTimeout(() => {
-      if (expenseDraftRowRef.current && !expenseDraftRowRef.current.contains(document.activeElement)) {
-        commitExpenseDraftIfReady();
-      }
-    }, 0);
-  };
-
-  const commitExpenseDraftIfReady = async () => {
-    if (!expenseDraft.vehicleId || !expenseDraft.expense.trim() || !expenseDraft.amount || !expenseDraft.master.trim()) return;
-
-    // Checked against EVERY expense, not just vehicle-tagged ones — the common
-    // mistake is the same spend already sitting untagged on the main sheet.
-    const duplicate = findPossibleDuplicate(expenseDraft, expenses);
-    if (duplicate) {
-      const vehicleName = duplicate.vehicleId ? vehiclesById.get(duplicate.vehicleId)?.name : null;
-      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
-    }
-
-    try {
-      setSavingExpenseDraft(true);
-      const saved = await addExpense({
-        date: expenseDraft.date,
-        expense: expenseDraft.expense.trim(),
-        amount: Number(expenseDraft.amount),
-        master: expenseDraft.master.trim(),
-        bill: expenseDraft.billFileObj || undefined,
-        vehicleId: expenseDraft.vehicleId,
-        litres: isFuelMaster(expenseDraft.master) ? expenseDraft.litres : "",
-        odometer: isFuelMaster(expenseDraft.master) ? expenseDraft.odometer : "",
-        customFields: expenseDraft.customFields,
-      });
-      setExpenses((prev) => [saved, ...prev]);
-      // Keep the vehicle selected — logging several expenses for the same
-      // truck in a row is the common case, so only the rest of the row resets.
-      setExpenseDraft({ ...emptyExpenseDraft(), vehicleId: expenseDraft.vehicleId });
-      notifySuccess("Expense added");
-      focusExpenseCell("draft", "expense");
-    } catch (err) {
-      notifyError(err.message || "Failed to add expense");
-    } finally {
-      setSavingExpenseDraft(false);
-    }
-  };
-
   const updateExpenseField = (id, field, value) => {
     setExpenses((prev) => prev.map((e) => (e._id === id ? { ...e, [field]: value } : e)));
   };
@@ -651,10 +796,6 @@ const Vehicles = () => {
     if (colDef.type === "select" || colDef.type === "date") return;
     const row = expenses.find((e) => e._id === id);
     saveCustomField(id, colDef.key, row?.customFields?.[colDef.key]);
-  };
-
-  const handleDraftCustomFieldChange = (colDef, value) => {
-    setExpenseDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
   };
 
   const handleExpenseRowBillChange = async (id, file) => {
@@ -1261,118 +1402,19 @@ const Vehicles = () => {
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {/* Draft row — always present, regardless of search/grouping */}
-                    <tr ref={expenseDraftRowRef} onBlur={handleExpenseDraftRowBlur} className="divide-x divide-gray-200 dark:divide-gray-700 bg-blue-50/40 dark:bg-blue-900/20">
-                      <td className="px-3 py-2"></td>
-                      <td className="px-2 py-2">
-                        <input
-                          ref={setExpenseCellRef("draft", "date")}
-                          type="date"
-                          value={expenseDraft.date}
-                          onChange={(e) => setExpenseDraftField("date", e.target.value)}
-                          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "date", { isDraft: true })}
-                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <select
-                          ref={setExpenseCellRef("draft", "vehicleId")}
-                          value={expenseDraft.vehicleId}
-                          onChange={(e) => setExpenseDraftField("vehicleId", e.target.value)}
-                          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "vehicleId", { isDraft: true })}
-                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-gray-800"
-                        >
-                          <option value="" disabled>
-                            Select vehicle
-                          </option>
-                          {vehicles.map((v) => (
-                            <option key={v._id} value={v._id}>
-                              {v.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          ref={setExpenseCellRef("draft", "expense")}
-                          type="text"
-                          value={expenseDraft.expense}
-                          onChange={(e) => setExpenseDraftField("expense", e.target.value)}
-                          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "expense", { isDraft: true })}
-                          placeholder="E.g., Diesel refill"
-                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          ref={setExpenseCellRef("draft", "amount")}
-                          type="number"
-                          value={expenseDraft.amount}
-                          onChange={(e) => setExpenseDraftField("amount", e.target.value)}
-                          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "amount", { isDraft: true })}
-                          placeholder="0"
-                          min="0"
-                          step="0.01"
-                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <MasterAutocomplete
-                          inputRef={setExpenseCellRef("draft", "master")}
-                          value={expenseDraft.master}
-                          masters={masters}
-                          catalog={masterCatalog}
-                          onCatalogChange={reloadAfterMasterChange}
-                          onChange={(value) => setExpenseDraftField("master", value)}
-                          onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "master", { isDraft: true })}
-                          placeholder="E.g., Fuel & Diesel"
-                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        {isFuelMaster(expenseDraft.master) ? (
-                          <input
-                            ref={setExpenseCellRef("draft", "litres")}
-                            type="number"
-                            value={expenseDraft.litres}
-                            onChange={(e) => setExpenseDraftField("litres", e.target.value)}
-                            onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "litres", { isDraft: true })}
-                            placeholder="0"
-                            min="0"
-                            step="0.01"
-                            className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
-                          />
-                        ) : (
-                          <span className="block text-center text-gray-300 dark:text-gray-500 text-sm">—</span>
-                        )}
-                      </td>
-                      {customColumns.map((col) => (
-                        <td key={col._id} className="px-2 py-2">
-                          <CustomCell
-                            colDef={col}
-                            value={expenseDraft.customFields?.[col.key]}
-                            onChange={(value) => handleDraftCustomFieldChange(col, value)}
-                          />
-                        </td>
-                      ))}
-                      <td className="px-2 py-2 text-center">
-                        <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
-                          <FiPaperclip size={16} className={expenseDraft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
-                          <input
-                            type="file"
-                            accept="image/jpeg,image/png,image/webp,application/pdf"
-                            className="hidden"
-                            onChange={(e) => setExpenseDraftField("billFileObj", e.target.files?.[0] || null)}
-                          />
-                        </label>
-                      </td>
-                      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
-                        {savingExpenseDraft ? (
-                          <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
-                        ) : (
-                          <FiPlus size={16} className="mx-auto" />
-                        )}
-                      </td>
-                    </tr>
+                    <ExpenseDraftRow
+                      vehicles={vehicles}
+                      masters={masters}
+                      masterCatalog={masterCatalog}
+                      reloadAfterMasterChange={reloadAfterMasterChange}
+                      customColumns={customColumns}
+                      expenses={expenses}
+                      vehiclesById={vehiclesById}
+                      setExpenses={setExpenses}
+                      setExpenseCellRef={setExpenseCellRef}
+                      handleExpenseCellKeyDown={handleExpenseCellKeyDown}
+                      focusExpenseCell={focusExpenseCell}
+                    />
 
                     {filteredVehicleExpenseRows.length === 0 && (
                       <tr>

@@ -87,23 +87,14 @@ const combineDateRange = (from, to) => {
 // column") walks FIELD_ORDER left to right, same pattern as Expenses.jsx/
 // Vehicles.jsx's own draft rows: Enter moves to the next field, and Enter on
 // the LAST field commits the row instead of just sitting there.
-const LedgerSheet = ({
-  rows,
-  contractorOptions,
-  dateLabel,
-  dateMode = "single", // "single" | "range"
-  dateType = "text", // only used when dateMode === "single"
-  fields, // [{ key, placeholder, type, width }]
-  computeAmount, // (draft) => number|null — shown live in the draft row; null hides it
-  renderAmount, // (row) => string
-  onAdd,
-  onDelete,
-  onBulkDelete, // (ids) => Promise — omit to leave bulk-delete off for this sheet
-  search,
-  allowedContractorIds, // Set of contractorId, or null/undefined for "no filter"
-  sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
-}) => {
-  const isRange = dateMode === "range";
+// Draft row, isolated into its own component (21 Sep, per Rishi: "it is
+// lagging way too much when i enter any data in it"). Before this, `draft`
+// state lived in LedgerSheet itself, right alongside the (potentially
+// hundreds-of-rows-long) `rows` list — every keystroke re-rendered the WHOLE
+// ledger, existing rows included, which is what got slower and slower as a
+// contractor's history grew. Typing now only re-renders this one small row;
+// LedgerSheet's existing-row list is completely untouched by it.
+const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete }) => {
   const emptyDraft = () => ({
     contractorId: "",
     ...(isRange ? { dateFrom: "", dateTo: "" } : { date: "" }),
@@ -116,16 +107,6 @@ const LedgerSheet = ({
   const setFieldRef = (key) => (el) => {
     fieldRefs.current[key] = el;
   };
-
-  // Custom columns (21 Sep) — Work Log and Payments keep independent column
-  // sets even though they share this component, since they're genuinely
-  // different ledger shapes (see backend/models/columnDefStore.js's header).
-  const [customColumns, setCustomColumns] = useState([]);
-  const loadColumns = () => fetchColumns(sheetKey).then(setCustomColumns).catch(() => setCustomColumns([]));
-  useEffect(() => {
-    loadColumns();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetKey]);
 
   const handleDraftCustomFieldChange = (colDef, value) => {
     setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
@@ -166,11 +147,125 @@ const LedgerSheet = ({
     }
   };
 
+  const liveAmount = computeAmount ? computeAmount(draft) : null;
+
+  return (
+    <tr ref={rowRef} onBlur={handleRowBlur} className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
+      {onBulkDelete && <td className="px-3 py-2"></td>}
+      {isRange ? (
+        <>
+          <td className="px-3 py-2">
+            <input
+              ref={setFieldRef("dateFrom")}
+              type="date"
+              value={draft.dateFrom}
+              onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value }))}
+              onKeyDown={(e) => handleKeyDown(e, "dateFrom")}
+              className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </td>
+          <td className="px-3 py-2">
+            <input
+              ref={setFieldRef("dateTo")}
+              type="date"
+              value={draft.dateTo}
+              onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value }))}
+              onKeyDown={(e) => handleKeyDown(e, "dateTo")}
+              className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </td>
+        </>
+      ) : (
+        <td className="px-3 py-2">
+          <input
+            ref={setFieldRef("date")}
+            type={dateType}
+            value={draft.date}
+            onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))}
+            onKeyDown={(e) => handleKeyDown(e, "date")}
+            className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </td>
+      )}
+      <td className="px-3 py-2">
+        <select
+          ref={setFieldRef("contractorId")}
+          value={draft.contractorId}
+          onChange={(e) => setDraft((d) => ({ ...d, contractorId: e.target.value }))}
+          onKeyDown={(e) => handleKeyDown(e, "contractorId")}
+          className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+        >
+          <option value="">Choose contractor…</option>
+          {contractorOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </td>
+      <td className="px-3 py-2 text-gray-400">
+        {contractorOptions.find((o) => o.value === draft.contractorId)?.master || "—"}
+      </td>
+      {fields.map((f) => (
+        <td key={f.key} className="px-3 py-2">
+          <input
+            ref={setFieldRef(f.key)}
+            type={f.type || "text"}
+            value={draft[f.key]}
+            onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+            onKeyDown={(e) => handleKeyDown(e, f.key)}
+            placeholder={f.placeholder}
+            style={f.width ? { width: f.width } : undefined}
+            className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </td>
+      ))}
+      {customColumns.map((col) => (
+        <td key={col._id} className="px-3 py-2">
+          <CustomCell
+            colDef={col}
+            value={draft.customFields?.[col.key]}
+            onChange={(value) => handleDraftCustomFieldChange(col, value)}
+          />
+        </td>
+      ))}
+      {computeAmount && <td className="px-3 py-2 text-gray-400">{liveAmount != null ? money(liveAmount) : "—"}</td>}
+      <td className="px-3 py-2"></td>
+    </tr>
+  );
+};
+
+const LedgerSheet = ({
+  rows,
+  contractorOptions,
+  dateLabel,
+  dateMode = "single", // "single" | "range"
+  dateType = "text", // only used when dateMode === "single"
+  fields, // [{ key, placeholder, type, width }]
+  computeAmount, // (draft) => number|null — shown live in the draft row; null hides it
+  renderAmount, // (row) => string
+  onAdd,
+  onDelete,
+  onBulkDelete, // (ids) => Promise — omit to leave bulk-delete off for this sheet
+  search,
+  allowedContractorIds, // Set of contractorId, or null/undefined for "no filter"
+  sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
+}) => {
+  const isRange = dateMode === "range";
+
+  // Custom columns (21 Sep) — Work Log and Payments keep independent column
+  // sets even though they share this component, since they're genuinely
+  // different ledger shapes (see backend/models/columnDefStore.js's header).
+  const [customColumns, setCustomColumns] = useState([]);
+  const loadColumns = () => fetchColumns(sheetKey).then(setCustomColumns).catch(() => setCustomColumns([]));
+  useEffect(() => {
+    loadColumns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetKey]);
+
   const filtered = rows.filter((r) => {
     if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
     if (!search) return true;
     const c = contractorOptions.find((o) => o.value === r.contractorId);
-    const haystack = `${c?.label || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
+    const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
     return haystack.includes(search.toLowerCase());
   });
 
@@ -222,7 +317,6 @@ const LedgerSheet = ({
     }
   };
 
-  const liveAmount = computeAmount ? computeAmount(draft) : null;
   const dateCols = isRange ? 2 : 1;
 
   return (
@@ -299,6 +393,7 @@ const LedgerSheet = ({
             <th className="px-3 py-2 font-medium">{dateLabel}</th>
           )}
           <th className="px-3 py-2 font-medium">Contractor</th>
+          <th className="px-3 py-2 font-medium">Master</th>
           {fields.map((f) => (
             <th key={f.key} className="px-3 py-2 font-medium">{f.label}</th>
           ))}
@@ -310,88 +405,21 @@ const LedgerSheet = ({
         </tr>
       </thead>
       <tbody>
-        <tr ref={rowRef} onBlur={handleRowBlur} className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30">
-          {onBulkDelete && <td className="px-3 py-2"></td>}
-          {isRange ? (
-            <>
-              <td className="px-3 py-2">
-                <input
-                  ref={setFieldRef("dateFrom")}
-                  type="date"
-                  value={draft.dateFrom}
-                  onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value }))}
-                  onKeyDown={(e) => handleKeyDown(e, "dateFrom")}
-                  className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-                />
-              </td>
-              <td className="px-3 py-2">
-                <input
-                  ref={setFieldRef("dateTo")}
-                  type="date"
-                  value={draft.dateTo}
-                  onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value }))}
-                  onKeyDown={(e) => handleKeyDown(e, "dateTo")}
-                  className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-                />
-              </td>
-            </>
-          ) : (
-            <td className="px-3 py-2">
-              <input
-                ref={setFieldRef("date")}
-                type={dateType}
-                value={draft.date}
-                onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))}
-                onKeyDown={(e) => handleKeyDown(e, "date")}
-                className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-              />
-            </td>
-          )}
-          <td className="px-3 py-2">
-            <select
-              ref={setFieldRef("contractorId")}
-              value={draft.contractorId}
-              onChange={(e) => setDraft((d) => ({ ...d, contractorId: e.target.value }))}
-              onKeyDown={(e) => handleKeyDown(e, "contractorId")}
-              className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-            >
-              <option value="">Choose contractor…</option>
-              {contractorOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </td>
-          {fields.map((f) => (
-            <td key={f.key} className="px-3 py-2">
-              <input
-                ref={setFieldRef(f.key)}
-                type={f.type || "text"}
-                value={draft[f.key]}
-                onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-                onKeyDown={(e) => handleKeyDown(e, f.key)}
-                placeholder={f.placeholder}
-                style={f.width ? { width: f.width } : undefined}
-                className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-              />
-            </td>
-          ))}
-          {customColumns.map((col) => (
-            <td key={col._id} className="px-3 py-2">
-              <CustomCell
-                colDef={col}
-                value={draft.customFields?.[col.key]}
-                onChange={(value) => handleDraftCustomFieldChange(col, value)}
-              />
-            </td>
-          ))}
-          {computeAmount && <td className="px-3 py-2 text-gray-400">{liveAmount != null ? money(liveAmount) : "—"}</td>}
-          <td className="px-3 py-2"></td>
-        </tr>
+        <DraftRow
+          isRange={isRange}
+          dateType={dateType}
+          fields={fields}
+          contractorOptions={contractorOptions}
+          customColumns={customColumns}
+          computeAmount={computeAmount}
+          onAdd={onAdd}
+          onBulkDelete={onBulkDelete}
+        />
 
         {filtered.length === 0 && (
           <tr>
             <td
-              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 2 + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
+              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 3 + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
               className="px-3 py-2 text-gray-400 italic"
             >
               {rows.length === 0 ? "Nothing logged yet." : "No rows match your search."}
@@ -423,6 +451,7 @@ const LedgerSheet = ({
               )}
               <td className="px-3 py-2" colSpan={dateCols}>{row.date || row.dateLabel}</td>
               <td className="px-3 py-2">{c?.label || "—"}</td>
+              <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c?.master || "—"}</td>
               {fields.map((f) => (
                 <td key={f.key} className="px-3 py-2">{f.format ? f.format(row[f.key]) : row[f.key]}</td>
               ))}
@@ -585,6 +614,7 @@ const LaborWages = () => {
   const [showPaymentsExportModal, setShowPaymentsExportModal] = useState(false);
 
   const contractorName = (id) => contractors.find((c) => c._id === id)?.name || "";
+  const contractorMaster = (id) => contractors.find((c) => c._id === id)?.contractorType || "";
 
   const handleExportWorkLogCsv = () => {
     if (wageEntries.length === 0) {
@@ -595,6 +625,7 @@ const LaborWages = () => {
       `${FILE_PREFIX}-work-log-${todayStr()}.csv`,
       [
         { key: "contractor", label: "Contractor" },
+        { key: "master", label: "Master" },
         { key: "date", label: "Date" },
         { key: "cft", label: "CFT" },
         { key: "rate", label: "Rate" },
@@ -602,6 +633,7 @@ const LaborWages = () => {
       ],
       wageEntries.map((w) => ({
         contractor: contractorName(w.contractorId),
+        master: contractorMaster(w.contractorId),
         date: w.dateLabel,
         cft: w.cft,
         rate: w.rate,
@@ -619,12 +651,14 @@ const LaborWages = () => {
       `${FILE_PREFIX}-payments-${todayStr()}.csv`,
       [
         { key: "contractor", label: "Contractor" },
+        { key: "master", label: "Master" },
         { key: "date", label: "Date" },
         { key: "label", label: "Label" },
         { key: "amount", label: "Amount (INR)" },
       ],
       payments.map((p) => ({
         contractor: contractorName(p.contractorId),
+        master: contractorMaster(p.contractorId),
         date: p.date,
         label: p.label,
         amount: p.amount,
@@ -656,7 +690,10 @@ const LaborWages = () => {
     const millsById = new Map(mills.map((m) => [m._id, m]));
     return contractors.map((c) => {
       const mill = millsById.get(c.millId);
-      return { value: c._id, label: mill ? `${c.name} (${mill.name}, ${mill.location})` : c.name };
+      // master (21 Sep, per Rishi: "add one master column in labour wages
+      // sheet in workflow and payment sub split pages both") — carried along
+      // here so LedgerSheet can show it without a separate lookup.
+      return { value: c._id, label: mill ? `${c.name} (${mill.name}, ${mill.location})` : c.name, master: c.contractorType || "" };
     });
   }, [contractors, mills]);
 

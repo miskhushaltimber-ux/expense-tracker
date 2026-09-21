@@ -31,7 +31,10 @@ const SHEETS = {
 const DOC_HEADERS = ["aadharFile", "panFile", "greenCardFile"];
 const HEADERS = {
   mills: ["id", "userId", "location", "name", "createdAt", "updatedAt"],
-  contractors: ["id", "userId", "millId", "name", "mobile", ...DOC_HEADERS, "openingBalance", "createdAt", "updatedAt"],
+  // contractorType (21 Sep, per Rishi: "add master ... MILL THEKEDAR, REPSO
+  // THEKEDAR, BUNDLE THEKEDAR etc") — a free-typed category tag, shown in the
+  // UI as "Master". Not related to the Masters catalog (expense categories).
+  contractors: ["id", "userId", "millId", "name", "mobile", ...DOC_HEADERS, "openingBalance", "contractorType", "createdAt", "updatedAt"],
   labors: ["id", "userId", "contractorId", "name", "mobile", ...DOC_HEADERS, "createdAt", "updatedAt"],
   // dateLabel is free text ("22-06 TO 27-06") rather than a real date, same
   // as sir's paper sheet — a CFT batch usually spans several days, not one.
@@ -65,6 +68,7 @@ const toContractor = (row) => ({
   panFile: row.panFile || null,
   greenCardFile: row.greenCardFile || null,
   openingBalance: num(row.openingBalance),
+  contractorType: row.contractorType || "",
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });

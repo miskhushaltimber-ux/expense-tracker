@@ -168,7 +168,7 @@ const millHandlers = makeSimpleHandlers({
 });
 const contractorHandlers = makePersonHandlers({
   listByUser: listContractorsByUser, create: createContractor, updateById: updateContractorById, deleteById: deleteContractorById,
-  parentField: "millId", fields: ["openingBalance"], label: "Contractor",
+  parentField: "millId", fields: ["openingBalance", "contractorType"], label: "Contractor",
 });
 const laborHandlers = makePersonHandlers({
   listByUser: listLaborsByUser, create: createLabor, updateById: updateLaborById, deleteById: deleteLaborById,
