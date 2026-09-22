@@ -196,6 +196,12 @@ const Home = () => {
 
   // --- Drill-down drawer (sir's item ii) ---
   const [drillMaster, setDrillMaster] = useState(null);
+  // Vehicles/Labor Wages tab drill-downs (22 Sep, per Rishi's notebook: the
+  // Overview tab's chart click-through never made it to the other two tabs'
+  // charts) — same drawer idea, one per tab since the underlying rows are
+  // shaped completely differently (expense rows vs. Work Log+Payments rows).
+  const [drillVehicle, setDrillVehicle] = useState(null); // a vehicle's _id
+  const [drillContractor, setDrillContractor] = useState(null); // a contractor's _id
 
   // --- Per-chart period + collapse controls ---
   const [trendPeriod, setTrendPeriod] = useState("6m");
@@ -271,13 +277,18 @@ const Home = () => {
     loadData();
   }, [user]);
 
-  // Close the drawer on Escape.
+  // Close whichever drawer is open on Escape.
   useEffect(() => {
-    if (!drillMaster) return;
-    const onKey = (e) => e.key === "Escape" && setDrillMaster(null);
+    if (!drillMaster && !drillVehicle && !drillContractor) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      setDrillMaster(null);
+      setDrillVehicle(null);
+      setDrillContractor(null);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drillMaster]);
+  }, [drillMaster, drillVehicle, drillContractor]);
 
   // --- Stable colour assignment -------------------------------------------
   // Colour follows the master, not its rank in the current view. Built from
@@ -444,6 +455,7 @@ const Home = () => {
   const vehicleBySpend = useMemo(() => {
     return vehicles
       .map((v) => ({
+        id: v._id,
         name: v.name,
         spend: vehicleExpensesForChart.filter((e) => e.vehicleId === v._id).reduce((s, e) => s + (Number(e.amount) || 0), 0),
       }))
@@ -461,6 +473,7 @@ const Home = () => {
   const laborByContractor = useMemo(() => {
     return laborContractors
       .map((c) => ({
+        id: c._id,
         name: c.name,
         earned: laborWages.filter((w) => w.contractorId === c._id).reduce((s, w) => s + (Number(w.amount) || 0), 0),
         paid: laborPayments.filter((p) => p.contractorId === c._id).reduce((s, p) => s + (Number(p.amount) || 0), 0),
@@ -949,6 +962,7 @@ const Home = () => {
           </div>
         </div>
       )}
+
         </>
       )}
 
@@ -977,6 +991,7 @@ const Home = () => {
             {vehicleBySpend.length > 0 && (
               <ChartCard
                 title="Spend by vehicle"
+                subtitle="Click any bar to see that vehicle's entries"
                 INK={INK}
                 periodOptions={BREAKDOWN_PERIOD_OPTIONS}
                 period={vehiclePeriod}
@@ -998,7 +1013,15 @@ const Home = () => {
                     />
                     <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
                     <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => <span style={{ color: INK.secondary }}>{value}</span>} />
-                    <Bar dataKey="spend" name="Spend" fill={seriesColors[0]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar
+                      dataKey="spend"
+                      name="Spend"
+                      fill={seriesColors[0]}
+                      radius={[4, 4, 0, 0]}
+                      maxBarSize={40}
+                      onClick={(d) => d?.id && setDrillVehicle(d.id)}
+                      className="cursor-pointer"
+                    />
                   </BarChart>
                 </ResponsiveContainer>
                 </div>
@@ -1040,7 +1063,7 @@ const Home = () => {
             {laborByContractor.length > 0 && (
               <ChartCard
                 title="Earned vs Paid, by contractor"
-                subtitle="All time — Work Log entries don't carry a real date to filter by"
+                subtitle="Click any bar to see that contractor's entries — all time, Work Log entries don't carry a real date to filter by"
                 INK={INK}
                 collapsed={!!collapsedCharts.labor}
                 onToggleCollapse={() => toggleChartCollapsed("labor")}
@@ -1059,8 +1082,24 @@ const Home = () => {
                     />
                     <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
                     <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => <span style={{ color: INK.secondary }}>{value}</span>} />
-                    <Bar dataKey="earned" name="Earned" fill={seriesColors[1]} radius={[4, 4, 0, 0]} maxBarSize={40} />
-                    <Bar dataKey="paid" name="Paid" fill={seriesColors[2]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar
+                      dataKey="earned"
+                      name="Earned"
+                      fill={seriesColors[1]}
+                      radius={[4, 4, 0, 0]}
+                      maxBarSize={40}
+                      onClick={(d) => d?.id && setDrillContractor(d.id)}
+                      className="cursor-pointer"
+                    />
+                    <Bar
+                      dataKey="paid"
+                      name="Paid"
+                      fill={seriesColors[2]}
+                      radius={[4, 4, 0, 0]}
+                      maxBarSize={40}
+                      onClick={(d) => d?.id && setDrillContractor(d.id)}
+                      className="cursor-pointer"
+                    />
                   </BarChart>
                 </ResponsiveContainer>
                 </div>
@@ -1068,6 +1107,133 @@ const Home = () => {
             )}
           </>
         )
+      )}
+
+      {/* Vehicle drill-down drawer (22 Sep, per Rishi's notebook: the
+          Overview tab's chart click-through never made it to the Vehicles/
+          Labor Wages tabs' charts) — top-level so it renders regardless of
+          which tab is active, since drillVehicle only ever gets set from the
+          Vehicles tab's chart. */}
+      {drillVehicle && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/20" onClick={() => setDrillVehicle(null)} />
+          <div className="relative bg-white dark:bg-gray-800 w-full max-w-md h-full shadow-xl flex flex-col">
+            {(() => {
+              const vehicle = vehicles.find((v) => v._id === drillVehicle);
+              const rows = vehicleExpenses
+                .filter((e) => e.vehicleId === drillVehicle)
+                .sort((a, b) => new Date(b.date) - new Date(a.date));
+              const rowsTotal = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+              return (
+                <>
+                  <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-start justify-between">
+                    <div className="min-w-0">
+                      <h2 className="font-semibold truncate" style={{ color: INK.primary }}>{vehicle?.name || "Vehicle"}</h2>
+                      <p className="text-xs mt-1" style={{ color: INK.muted }}>
+                        {rows.length} {rows.length === 1 ? "entry" : "entries"} · {formatCurrency(rowsTotal)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setDrillVehicle(null)}
+                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 shrink-0"
+                      title="Close"
+                    >
+                      <FiX size={20} />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                    {rows.map((row) => (
+                      <div key={row._id} className="px-5 py-3 flex justify-between items-start gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>{row.expense}</p>
+                          <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
+                            {formatDate(row.date)} · {row.master}
+                            {row.billFile ? " · bill attached" : " · no bill"}
+                          </p>
+                        </div>
+                        <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
+                          {formatCurrency(row.amount)}
+                        </span>
+                      </div>
+                    ))}
+                    {rows.length === 0 && (
+                      <div className="p-8 text-center text-sm" style={{ color: INK.muted }}>No entries</div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Contractor drill-down drawer (22 Sep, per Rishi's notebook) — merges
+          that contractor's Work Log entries and Payments into one list, newest
+          first by whichever timestamp each row actually has. Also top-level,
+          same reasoning as the vehicle drawer above. */}
+      {drillContractor && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/20" onClick={() => setDrillContractor(null)} />
+          <div className="relative bg-white dark:bg-gray-800 w-full max-w-md h-full shadow-xl flex flex-col">
+            {(() => {
+              const contractor = laborContractors.find((c) => c._id === drillContractor);
+              const workRows = laborWages
+                .filter((w) => w.contractorId === drillContractor)
+                .map((w) => ({ ...w, _kind: "Work Log", _amount: w.amount }));
+              const payRows = laborPayments
+                .filter((p) => p.contractorId === drillContractor)
+                .map((p) => ({ ...p, _kind: "Payment", _amount: p.amount }));
+              const rows = [...workRows, ...payRows].sort(
+                (a, b) => new Date(b.createdAt || b.date || 0) - new Date(a.createdAt || a.date || 0)
+              );
+              const earned = workRows.reduce((s, w) => s + (Number(w.amount) || 0), 0);
+              const paid = payRows.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+              return (
+                <>
+                  <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-start justify-between">
+                    <div className="min-w-0">
+                      <h2 className="font-semibold truncate" style={{ color: INK.primary }}>{contractor?.name || "Contractor"}</h2>
+                      <p className="text-xs mt-1" style={{ color: INK.muted }}>
+                        Earned {formatCurrency(earned)} · Paid {formatCurrency(paid)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setDrillContractor(null)}
+                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 shrink-0"
+                      title="Close"
+                    >
+                      <FiX size={20} />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                    {rows.map((row) => (
+                      <div key={`${row._kind}-${row._id}`} className="px-5 py-3 flex justify-between items-start gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
+                            {row._kind}
+                            {row._kind === "Payment" && row.label ? ` — ${row.label}` : ""}
+                          </p>
+                          <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
+                            {row._kind === "Work Log" ? `${row.dateLabel || "—"} · ${row.cft || 0} CFT × ₹${row.rate || 0}` : formatDate(row.date)}
+                          </p>
+                        </div>
+                        <span
+                          className="text-sm font-semibold shrink-0 tabular-nums"
+                          style={{ color: row._kind === "Work Log" ? STATUS.good : STATUS.warning }}
+                        >
+                          {row._kind === "Work Log" ? "+" : "−"}{formatCurrency(row._amount)}
+                        </span>
+                      </div>
+                    ))}
+                    {rows.length === 0 && (
+                      <div className="p-8 text-center text-sm" style={{ color: INK.muted }}>No entries</div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
     </div>
   );

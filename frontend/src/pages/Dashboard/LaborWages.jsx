@@ -526,70 +526,170 @@ const contractorReport = (contractor, wageEntries, payments) => {
   return { totalEarned, totalPaid, openingBalance, balance };
 };
 
+// Redesigned 22 Sep, per Rishi's notebook: "looks bad as hell" — a colored
+// left accent bar (green/amber/red, matching the settle status) replaces the
+// plain status line as the card's primary signal, a Master chip sits next to
+// the mill label when the contractor has one, and the numbers are laid out
+// as small stat blocks instead of a loose 3-column grid.
 const ReportCard = ({ contractor, millLabel, report }) => {
   const { totalEarned, totalPaid, openingBalance, balance } = report;
   const status =
     balance > 0
-      ? { text: `Pending — you owe ${money(balance)}`, cls: "text-amber-700 dark:text-amber-400" }
+      ? { text: `Pending — you owe ${money(balance)}`, cls: "text-amber-700 dark:text-amber-400", bar: "border-l-amber-400", badge: "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300" }
       : balance < 0
-      ? { text: `${contractor.name} owes back ${money(-balance)}`, cls: "text-red-700 dark:text-red-400" }
-      : { text: "Settled — nothing pending either way", cls: "text-green-700 dark:text-green-400" };
+      ? { text: `${contractor.name} owes back ${money(-balance)}`, cls: "text-red-700 dark:text-red-400", bar: "border-l-red-400", badge: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300" }
+      : { text: "Settled", cls: "text-green-700 dark:text-green-400", bar: "border-l-green-400", badge: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300" };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-3">
-      <div>
-        <h3 className="font-semibold text-gray-800 dark:text-gray-100">{contractor.name}</h3>
-        {millLabel && <p className="text-xs text-gray-400">{millLabel}</p>}
+    <div className={`bg-white dark:bg-gray-800 rounded-lg shadow border-l-4 ${status.bar} p-4 space-y-3`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-gray-800 dark:text-gray-100 truncate">{contractor.name}</h3>
+          {millLabel && <p className="text-xs text-gray-400 truncate">{millLabel}</p>}
+        </div>
+        {contractor.contractorType && (
+          <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300">
+            {contractor.contractorType}
+          </span>
+        )}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+      <div className="grid grid-cols-3 gap-2 text-sm">
         <div>
-          <div className="text-gray-400 text-xs">Total Paid</div>
+          <div className="text-gray-400 text-[11px]">Paid</div>
           <div className="font-medium text-gray-800 dark:text-gray-100">{money(totalPaid)}</div>
         </div>
         <div>
-          <div className="text-gray-400 text-xs">Total Earned</div>
+          <div className="text-gray-400 text-[11px]">Earned</div>
           <div className="font-medium text-gray-800 dark:text-gray-100">{money(totalEarned)}</div>
         </div>
         <div>
-          <div className="text-gray-400 text-xs">Opening Balance</div>
+          <div className="text-gray-400 text-[11px]">Opening</div>
           <div className="font-medium text-gray-800 dark:text-gray-100">{money(openingBalance)}</div>
         </div>
       </div>
-      <p className={`text-sm font-medium ${status.cls}`}>{status.text}</p>
+      <span className={`inline-block text-xs font-medium px-2 py-1 rounded-full ${status.badge}`}>{status.text}</span>
     </div>
   );
 };
 
 const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, allowedContractorIds }) => {
   const [selected, setSelected] = useState("");
+  // Search + Master filter (22 Sep, per Rishi's notebook) — a Master filter
+  // is only meaningful now that contractorType (Manage Data's "Master" tag)
+  // exists at all, see the Eighteenth update.
+  const [search, setSearch] = useState("");
+  const [filterMaster, setFilterMaster] = useState("");
 
   const inScope = allowedContractorIds ? contractors.filter((c) => allowedContractorIds.has(c._id)) : contractors;
-  const shown = selected ? inScope.filter((c) => c._id === selected) : inScope;
-  // The dropdown itself should only offer contractors the page-level Mill/
-  // Contractor filter left in scope — otherwise picking a filtered-out name
-  // here would silently ignore that filter.
+  // The dropdown/filter options themselves should only offer contractors the
+  // page-level Mill/Contractor filter left in scope — otherwise picking a
+  // filtered-out name here would silently ignore that filter.
   const optionsInScope = allowedContractorIds
     ? contractorOptions.filter((o) => allowedContractorIds.has(o.value))
     : contractorOptions;
+  const masterOptions = useMemo(
+    () => [...new Set(inScope.map((c) => c.contractorType).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [inScope]
+  );
+
+  const q = search.trim().toLowerCase();
+  const shown = inScope.filter((c) => {
+    if (selected && c._id !== selected) return false;
+    if (filterMaster && c.contractorType !== filterMaster) return false;
+    if (q && !c.name.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  // A small totals strip across whatever's actually shown — lets Rishi see
+  // "how much pending across these N contractors" without adding every
+  // card's own number in his head.
+  const shownTotals = useMemo(() => {
+    return shown.reduce(
+      (acc, c) => {
+        const r = contractorReport(c, wageEntries, payments);
+        acc.earned += r.totalEarned;
+        acc.paid += r.totalPaid;
+        acc.balance += r.balance;
+        return acc;
+      },
+      { earned: 0, paid: 0, balance: 0 }
+    );
+  }, [shown, wageEntries, payments]);
+
+  const activeFilterCount = (filterMaster ? 1 : 0) + (selected ? 1 : 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <label className="text-sm text-gray-500 dark:text-gray-400">Contractor:</label>
-        <select
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-          className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-        >
-          <option value="">All contractors</option>
-          {optionsInScope.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="relative min-w-[12rem]">
+          <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search contractor…"
+            className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Master</label>
+          <select
+            value={filterMaster}
+            onChange={(e) => setFilterMaster(e.target.value)}
+            className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          >
+            <option value="">All masters</option>
+            {masterOptions.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Contractor</label>
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+          >
+            <option value="">All contractors</option>
+            {optionsInScope.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+        {activeFilterCount > 0 && (
+          <button
+            onClick={() => {
+              setSelected("");
+              setFilterMaster("");
+            }}
+            className="flex items-center gap-1.5 text-sm font-medium pb-2 text-gray-500 dark:text-gray-400 hover:text-red-600"
+          >
+            <FiXCircle size={15} />
+            Clear
+          </button>
+        )}
       </div>
 
+      {shown.length > 0 && (
+        <div className="flex flex-wrap gap-4 bg-gray-50 dark:bg-gray-900/40 rounded-lg px-4 py-3 text-sm">
+          <span className="text-gray-500 dark:text-gray-400">
+            {shown.length} {shown.length === 1 ? "contractor" : "contractors"}
+          </span>
+          <span>Earned <span className="font-semibold text-gray-800 dark:text-gray-100">{money(shownTotals.earned)}</span></span>
+          <span>Paid <span className="font-semibold text-gray-800 dark:text-gray-100">{money(shownTotals.paid)}</span></span>
+          <span>
+            {shownTotals.balance < 0 ? "Owed back" : "Pending"}{" "}
+            <span className={`font-semibold ${shownTotals.balance > 0 ? "text-amber-700 dark:text-amber-400" : shownTotals.balance < 0 ? "text-red-700 dark:text-red-400" : "text-green-700 dark:text-green-400"}`}>
+              {money(Math.abs(shownTotals.balance))}
+            </span>
+          </span>
+        </div>
+      )}
+
       {shown.length === 0 && (
-        <div className="text-sm text-gray-400 italic">No contractors yet.</div>
+        <div className="text-sm text-gray-400 italic">
+          {inScope.length === 0 ? "No contractors yet." : "No contractors match your search/filters."}
+        </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -696,6 +796,53 @@ const LaborWages = () => {
         label: p.label,
         amount: p.amount,
       }))
+    );
+  };
+
+  // Combined Work Log + Payments export (22 Sep, per Rishi's notebook: "add
+  // both work log and payment in the same sheet whenever we export or share
+  // regardless of which tab triggers it" — also the same underlying ask as
+  // the Eighteenth update's flagged "export only exports the currently-open
+  // tab" bug). Available from either tab's toolbar, always pulls BOTH
+  // ledgers together into one CSV, tagged by a Type column so the two kinds
+  // of rows (CFT work vs. a payment) stay distinguishable once merged. A
+  // downloadable CSV rather than a Google-Sheet share — the Share Sheet
+  // button still exports one ledger at a time; combining that flow too is
+  // a separate, not-yet-built piece (see status.md).
+  const handleExportCombinedCsv = () => {
+    if (wageEntries.length === 0 && payments.length === 0) {
+      alert("No work log entries or payments to export yet");
+      return;
+    }
+    const combined = [
+      ...wageEntries.map((w) => ({
+        type: "Work Log",
+        contractor: contractorName(w.contractorId),
+        master: contractorMaster(w.contractorId),
+        date: w.dateLabel,
+        details: `${w.cft || 0} CFT × ₹${w.rate || 0}`,
+        amount: w.amount,
+      })),
+      ...payments.map((p) => ({
+        type: "Payment",
+        contractor: contractorName(p.contractorId),
+        master: contractorMaster(p.contractorId),
+        date: p.date,
+        details: p.label || "",
+        amount: p.amount,
+      })),
+    ];
+    downloadCsv(
+      `${FILE_PREFIX}-work-log-and-payments-${todayStr()}.csv`,
+      [
+        { key: "type", label: "Type" },
+        { key: "contractor", label: "Contractor" },
+        { key: "master", label: "Master" },
+        { key: "date", label: "Date" },
+        { key: "details", label: "Details" },
+        { key: "amount", label: "Amount (INR)" },
+      ],
+      combined
     );
   };
 
@@ -879,6 +1026,13 @@ const LaborWages = () => {
                 <FiDownload size={14} className="mr-1.5" /> Download CSV
               </button>
               <button
+                onClick={handleExportCombinedCsv}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
+                title="Download Work Log + Payments together as one .csv file"
+              >
+                <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
+              </button>
+              <button
                 onClick={() => setShowWorkLogExportModal(true)}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
               >
@@ -940,6 +1094,13 @@ const LaborWages = () => {
                 title="Download as a .csv file (opens in Excel or Google Sheets)"
               >
                 <FiDownload size={14} className="mr-1.5" /> Download CSV
+              </button>
+              <button
+                onClick={handleExportCombinedCsv}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
+                title="Download Work Log + Payments together as one .csv file"
+              >
+                <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
               </button>
               <button
                 onClick={() => setShowPaymentsExportModal(true)}
