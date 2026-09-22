@@ -122,23 +122,52 @@ const DraftRow = ({
       if (vehicleId === "cancelled") return;
     }
 
+    // Optimistic insert (22 Sep, per Rishi: "whenever i give input in the
+    // sheet manually and hit enter to add it in the expenses it loads
+    // almost 1-2 seconds... make it fast as f***"). The row used to only
+    // appear — and the draft only clear — AFTER awaiting the server, so
+    // every add had a visible 1-2s freeze (Render free tier + Firestore
+    // round-trip). Now the draft clears and a placeholder row appears in
+    // the sheet INSTANTLY, before the network call even starts; the real
+    // saved row (real id, cloud bill URL, etc.) quietly swaps in once the
+    // server responds, and the whole thing rolls back — draft restored,
+    // nothing lost — if the save actually fails.
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const submittedDraft = draft;
+    setRows((prev) => [
+      {
+        _id: tempId,
+        date: submittedDraft.date,
+        expense: submittedDraft.expense.trim(),
+        amount: Number(submittedDraft.amount),
+        master: submittedDraft.master.trim(),
+        billFile: null,
+        vehicleId: vehicleId || undefined,
+        customFields: submittedDraft.customFields,
+        _pending: true,
+      },
+      ...prev,
+    ]);
+    setDraft(emptyDraft());
+    focusCell("draft", "date");
+
     try {
       setSavingDraft(true);
       const saved = await addExpense({
-        date: draft.date,
-        expense: draft.expense.trim(),
-        amount: Number(draft.amount),
-        master: draft.master.trim(),
-        bill: draft.billFileObj || undefined,
+        date: submittedDraft.date,
+        expense: submittedDraft.expense.trim(),
+        amount: Number(submittedDraft.amount),
+        master: submittedDraft.master.trim(),
+        bill: submittedDraft.billFileObj || undefined,
         vehicleId: vehicleId || undefined,
-        customFields: draft.customFields,
+        customFields: submittedDraft.customFields,
       });
-      setRows((prev) => [saved, ...prev]);
-      setDraft(emptyDraft());
+      setRows((prev) => prev.map((r) => (r._id === tempId ? saved : r)));
       notifySuccess("Row added");
-      focusCell("draft", "date");
     } catch (err) {
-      notifyError(err.message || "Failed to add row");
+      setRows((prev) => prev.filter((r) => r._id !== tempId));
+      setDraft(submittedDraft);
+      notifyError(err.message || "Failed to add row — restored it to the draft row above");
     } finally {
       setSavingDraft(false);
     }
@@ -472,7 +501,7 @@ const Expenses = () => {
 
   const saveRow = async (id) => {
     const row = rows.find((r) => r._id === id);
-    if (!row) return;
+    if (!row || row._pending) return; // still-saving optimistic row — no real id to PATCH yet
     if (!row.expense || !row.amount || !row.master) {
       notifyError("Expense, amount and master can't be left blank");
       loadData(); // revert to last-saved values
@@ -492,6 +521,7 @@ const Expenses = () => {
   // one-field PATCH — the backend merges it onto the row's existing
   // customFields rather than replacing the whole blob.
   const saveCustomField = async (id, key, value) => {
+    if (id.startsWith("temp-")) return;
     try {
       await updateExpense(id, { customFields: { [key]: value } });
     } catch (err) {
@@ -514,7 +544,7 @@ const Expenses = () => {
   };
 
   const handleRowBillChange = async (id, file) => {
-    if (!file) return;
+    if (!file || id.startsWith("temp-")) return;
     try {
       const updated = await updateExpense(id, { bill: file });
       setRows((prev) => prev.map((r) => (r._id === id ? updated : r)));
@@ -527,6 +557,7 @@ const Expenses = () => {
   // Detaching a bill without deleting the whole row. Replacing one is
   // "remove, then attach again" — the cell reverts to its upload state.
   const handleRemoveBill = async (id) => {
+    if (id.startsWith("temp-")) return;
     try {
       const updated = await updateExpense(id, { removeBill: true });
       setRows((prev) => prev.map((r) => (r._id === id ? updated : r)));
@@ -537,6 +568,7 @@ const Expenses = () => {
   };
 
   const handleDeleteRow = async (id) => {
+    if (id.startsWith("temp-")) return;
     try {
       await deleteExpense(id);
       setRows((prev) => prev.filter((r) => r._id !== id));
@@ -717,24 +749,31 @@ const Expenses = () => {
     );
   };
 
-  // One table row, used both for the flat list and inside a group.
+  // One table row, used both for the flat list and inside a group. A
+  // `_pending` row is the optimistic placeholder for something still being
+  // saved (22 Sep, performance fix) — shown faded and non-interactive until
+  // the server confirms it and swaps in the real row.
   const renderRow = (row) => (
     <tr
       key={row._id}
-      className={`divide-x divide-gray-200 dark:divide-gray-700 ${
+      className={`divide-x divide-gray-200 dark:divide-gray-700 ${row._pending ? "opacity-50" : ""} ${
         selectedIds.has(row._id)
           ? "bg-red-50/60 dark:bg-red-900/20"
           : "hover:bg-gray-50 dark:hover:bg-gray-900"
       }`}
     >
       <td className="px-3 py-2">
-        <input
-          type="checkbox"
-          checked={selectedIds.has(row._id)}
-          onChange={() => toggleSelected(row._id)}
-          aria-label="Select this row"
-          className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
-        />
+        {row._pending ? (
+          <div className="h-4 w-4 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-red-500 animate-spin" title="Saving…" />
+        ) : (
+          <input
+            type="checkbox"
+            checked={selectedIds.has(row._id)}
+            onChange={() => toggleSelected(row._id)}
+            aria-label="Select this row"
+            className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+          />
+        )}
       </td>
       <td className="px-2 py-2">
         <input
@@ -744,7 +783,8 @@ const Expenses = () => {
           onChange={(e) => updateRowField(row._id, "date", e.target.value)}
           onBlur={() => saveRow(row._id)}
           onKeyDown={(e) => handleCellKeyDown(e, row._id, "date", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          disabled={row._pending}
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 disabled:cursor-wait"
         />
       </td>
       <td className="px-2 py-2">
@@ -755,7 +795,8 @@ const Expenses = () => {
           onChange={(e) => updateRowField(row._id, "expense", e.target.value)}
           onBlur={() => saveRow(row._id)}
           onKeyDown={(e) => handleCellKeyDown(e, row._id, "expense", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          disabled={row._pending}
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 disabled:cursor-wait"
         />
       </td>
       <td className="px-2 py-2">
@@ -768,7 +809,8 @@ const Expenses = () => {
           onKeyDown={(e) => handleCellKeyDown(e, row._id, "amount", { isDraft: false })}
           min="0"
           step="0.01"
-          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+          disabled={row._pending}
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400 disabled:cursor-wait"
         />
       </td>
       <td className="px-2 py-2">
@@ -781,6 +823,7 @@ const Expenses = () => {
           onChange={(value) => updateRowField(row._id, "master", value)}
           onBlur={() => saveRow(row._id)}
           onKeyDown={(e) => handleCellKeyDown(e, row._id, "master", { isDraft: false })}
+          disabled={row._pending}
           className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
         />
       </td>
@@ -798,7 +841,9 @@ const Expenses = () => {
         </td>
       ))}
       <td className="px-2 py-2 text-center">
-        {row.billFile ? (
+        {row._pending ? (
+          <FiPaperclip size={16} className="inline text-gray-200 dark:text-gray-700" />
+        ) : row.billFile ? (
           <div className="inline-flex items-center justify-center gap-0.5">
             <a
               href={billUrl(row.billFile)}
@@ -830,9 +875,11 @@ const Expenses = () => {
         )}
       </td>
       <td className="px-2 py-2 text-center">
-        <button onClick={() => handleDeleteRow(row._id)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete row">
-          <FiTrash2 size={16} />
-        </button>
+        {!row._pending && (
+          <button onClick={() => handleDeleteRow(row._id)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete row">
+            <FiTrash2 size={16} />
+          </button>
+        )}
       </td>
     </tr>
   );

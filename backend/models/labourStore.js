@@ -34,7 +34,18 @@ const HEADERS = {
   // contractorType (21 Sep, per Rishi: "add master ... MILL THEKEDAR, REPSO
   // THEKEDAR, BUNDLE THEKEDAR etc") — a free-typed category tag, shown in the
   // UI as "Master". Not related to the Masters catalog (expense categories).
-  contractors: ["id", "userId", "millId", "name", "mobile", ...DOC_HEADERS, "openingBalance", "contractorType", "createdAt", "updatedAt"],
+  //
+  // millIds (22 Sep, per Rishi: a contractor like Jamir runs Mill-11/12/13
+  // under one KTPL-1 responsibility, but used to need a separate Contractor
+  // record PER mill — which split his Work Log/Payments/Report into three
+  // disconnected entries for the same real person. millIds is a JSON-array
+  // string (same "arrives as text over multipart form-data, stored as-is,
+  // parsed defensively on read" pattern as customFields — see
+  // utils/customFields.js) holding every mill this one contractor covers.
+  // millId (singular) stays in the row for any old data/code that hasn't
+  // been touched yet, but toContractor() below always DERIVES it from
+  // millIds[0] on read rather than trusting a stale stored value.
+  contractors: ["id", "userId", "millId", "millIds", "name", "mobile", ...DOC_HEADERS, "openingBalance", "contractorType", "createdAt", "updatedAt"],
   labors: ["id", "userId", "contractorId", "name", "mobile", ...DOC_HEADERS, "createdAt", "updatedAt"],
   // dateLabel is free text ("22-06 TO 27-06") rather than a real date, same
   // as sir's paper sheet — a CFT batch usually spans several days, not one.
@@ -56,22 +67,52 @@ export const ensurePaymentsSheet = () => ensureSheetTab(SHEETS.payments, HEADERS
 
 const num = (v) => (v === "" || v === null || v === undefined ? 0 : Number(v) || 0);
 
+// Parses a "which mills does this contractor cover" value defensively —
+// it's normally a JSON-array string (how it arrives from the frontend's
+// multipart form-data and how it's stored), but tolerates already being a
+// real array (e.g. mid-request, before it's round-tripped through storage)
+// and silently drops anything malformed rather than throwing.
+export const parseIdArray = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((v) => typeof v === "string" && v.trim());
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string" && v.trim()) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+// A contractor's mills, falling back to the old single millId for any row
+// saved before millIds existed — so nothing needs a manual migration step.
+const contractorMillIds = (row) => {
+  const parsed = parseIdArray(row.millIds);
+  return parsed.length ? parsed : row.millId ? [row.millId] : [];
+};
+
 const toMill = (row) => ({ _id: row.id, id: row.id, location: row.location, name: row.name, createdAt: row.createdAt, updatedAt: row.updatedAt });
 
-const toContractor = (row) => ({
-  _id: row.id,
-  id: row.id,
-  millId: row.millId,
-  name: row.name,
-  mobile: row.mobile || "",
-  aadharFile: row.aadharFile || null,
-  panFile: row.panFile || null,
-  greenCardFile: row.greenCardFile || null,
-  openingBalance: num(row.openingBalance),
-  contractorType: row.contractorType || "",
-  createdAt: row.createdAt,
-  updatedAt: row.updatedAt,
-});
+const toContractor = (row) => {
+  const millIds = contractorMillIds(row);
+  return {
+    _id: row.id,
+    id: row.id,
+    millId: millIds[0] || row.millId || "", // legacy/primary mill — derived, never trusted from storage directly
+    millIds,
+    name: row.name,
+    mobile: row.mobile || "",
+    aadharFile: row.aadharFile || null,
+    panFile: row.panFile || null,
+    greenCardFile: row.greenCardFile || null,
+    openingBalance: num(row.openingBalance),
+    contractorType: row.contractorType || "",
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+};
 
 const toLabor = (row) => ({
   _id: row.id,
@@ -254,6 +295,67 @@ export const listContractorsByUser = (userId) => contractorStore.listByUser(user
 export const createContractor = contractorStore.create;
 export const updateContractorById = contractorStore.updateById;
 export const deleteContractorById = contractorStore.deleteById;
+
+// Merging duplicate per-mill Contractor records into one (22 Sep, per
+// Rishi: Jamir being entered as three separate Contractors — one per mill —
+// split his Work Log/Payments/Report into three disconnected entries for
+// the same real person, once each mill's work got logged separately).
+// NEVER auto-run — this only fires when Rishi explicitly picks a primary +
+// duplicates on Manage Data and confirms. Every WageEntry/Payment row that
+// belonged to a duplicate is re-pointed at the primary contractor (nothing
+// about those rows' amounts/dates/CFT changes, only which contractor they're
+// filed under), the duplicates' mills are unioned onto the primary, opening
+// balances are summed (each duplicate's own opening balance was real money
+// owed, so merging silently dropping it would understate what's pending),
+// and the now-redundant duplicate Contractor rows are deleted. Every result
+// is returned so the caller can tell Rishi exactly what moved.
+export const mergeContractors = async (userId, primaryId, duplicateIds) => {
+  const rows = await getAllRows(SHEETS.contractors, HEADERS.contractors);
+  const mine = rows.filter((r) => r.userId === userId);
+  const primaryRow = mine.find((r) => r.id === primaryId);
+  if (!primaryRow) return { error: "primary_not_found" };
+  const dupRows = duplicateIds.map((id) => mine.find((r) => r.id === id)).filter(Boolean);
+  if (!dupRows.length) return { error: "no_duplicates_found" };
+
+  const millIdSet = new Set(contractorMillIds(primaryRow));
+  let openingBalanceSum = num(primaryRow.openingBalance);
+  for (const d of dupRows) {
+    contractorMillIds(d).forEach((id) => millIdSet.add(id));
+    openingBalanceSum += num(d.openingBalance);
+  }
+  const mergedMillIds = [...millIdSet];
+
+  const now = new Date().toISOString();
+  const updatedPrimaryRow = {
+    ...primaryRow,
+    millIds: JSON.stringify(mergedMillIds),
+    millId: mergedMillIds[0] || primaryRow.millId || "",
+    openingBalance: openingBalanceSum,
+    updatedAt: now,
+  };
+  await updateRowAt(SHEETS.contractors, HEADERS.contractors, primaryRow._row, updatedPrimaryRow);
+
+  const dupIdSet = new Set(dupRows.map((r) => r.id));
+  const moveContractorId = async (sheetKey) => {
+    const sheetRows = await getAllRows(SHEETS[sheetKey], HEADERS[sheetKey]);
+    const updates = sheetRows
+      .filter((r) => r.userId === userId && dupIdSet.has(r.contractorId))
+      .map((r) => ({ rowNumber: r._row, rowObject: { ...r, contractorId: primaryId, updatedAt: now } }));
+    if (updates.length) await updateRowsAt(SHEETS[sheetKey], HEADERS[sheetKey], updates);
+    return updates.length;
+  };
+  const movedWageEntries = await moveContractorId("wageEntries");
+  const movedPayments = await moveContractorId("payments");
+
+  await deleteRowsAt(SHEETS.contractors, dupRows.map((r) => r._row));
+
+  return {
+    contractor: toContractor(updatedPrimaryRow),
+    movedWageEntries,
+    movedPayments,
+    removedDuplicates: dupRows.length,
+  };
+};
 
 export const listLaborsByUser = (userId) => laborStore.listByUser(userId).then(alpha);
 export const createLabor = laborStore.create;

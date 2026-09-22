@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FiPaperclip, FiX, FiTrash2, FiHome, FiUsers, FiUser, FiTruck, FiFilter, FiXCircle, FiPlus, FiChevronDown, FiChevronRight, FiMapPin, FiSearch } from "react-icons/fi";
+import { FiPaperclip, FiX, FiTrash2, FiHome, FiUsers, FiUser, FiTruck, FiFilter, FiXCircle, FiPlus, FiChevronDown, FiChevronRight, FiMapPin, FiSearch, FiGitMerge } from "react-icons/fi";
 import {
   fetchLocations,
   addLocation,
@@ -13,6 +13,7 @@ import {
   addContractor,
   updateContractor,
   deleteContractor,
+  mergeContractors,
   fetchLabors,
   addLabor,
   updateLabor,
@@ -165,12 +166,69 @@ const DraftDocCell = ({ file, label, onAttach, onClear }) =>
     </label>
   );
 
+// A checkbox-list dropdown for picking several options at once — used for a
+// Contractor's mills (22 Sep, multi-mill support: a contractor like Jamir
+// covers Mill-11/12/13 at once, so a plain single <select> no longer fits).
+// Closes on an outside click, same pattern as any other lightweight popover
+// in this codebase.
+const MultiSelectDropdown = ({ options, selected, onChange, placeholder = "Choose…", disabled = false }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const toggle = (value) => {
+    onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
+  };
+
+  const label =
+    selected.length === 0
+      ? placeholder
+      : selected.length === 1
+      ? options.find((o) => o.value === selected[0])?.label || "1 selected"
+      : `${selected.length} mills selected`;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled}
+        className={`w-full text-left border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400 truncate ${
+          selected.length === 0 ? "text-gray-400 dark:text-gray-500" : ""
+        }`}
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-56 max-h-56 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1">
+          {options.length === 0 && <div className="px-3 py-1.5 text-xs text-gray-400 italic">Nothing to pick yet.</div>}
+          {options.map((o) => (
+            <label key={o.value} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer">
+              <input type="checkbox" checked={selected.includes(o.value)} onChange={() => toggle(o.value)} className="accent-red-500" />
+              <span className="truncate">{o.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // One generic management sheet, used for Mills, Contractors, Labor and now
 // Locations — they're all "a name, maybe a parent to pick, maybe mobile/
 // documents/an opening balance" underneath. `parent` is null for a flat list
-// (Locations); otherwise a mill needs a location, a contractor needs a mill,
-// a labor needs a contractor. `showMobile` / `showDocs` / `showOpeningBalance`
-// turn the optional columns on.
+// (Locations); otherwise a mill needs a location, a labor needs a contractor.
+// `multiParent` is the same idea but lets several be picked at once —
+// Contractors use this for their mills (22 Sep, multi-mill support) instead
+// of `parent`. `showMobile` / `showDocs` / `showOpeningBalance` turn the
+// optional columns on.
 const PersonManager = ({
   rows,
   onAdd,
@@ -178,6 +236,7 @@ const PersonManager = ({
   onDelete,
   namePlaceholder,
   parent = null, // { field, label, options: [{value,label}] } or null for a flat list
+  multiParent = null, // { field, label, options: [{value,label}] } — several picked at once
   showMobile = true,
   showDocs = true,
   showOpeningBalance = false,
@@ -192,6 +251,7 @@ const PersonManager = ({
     name: "",
     mobile: "",
     ...(parent ? { [parent.field]: "" } : {}),
+    ...(multiParent ? { [multiParent.field]: [] } : {}),
     openingBalance: "",
     contractorType: "",
     aadharFileObj: null,
@@ -213,9 +273,12 @@ const PersonManager = ({
     if (!q) return rows;
     return rows.filter((row) => {
       const parentLabel = parent ? parent.options.find((o) => o.value === row[parent.field])?.label || "" : "";
-      return `${row.name || ""} ${row.mobile || ""} ${parentLabel} ${row.contractorType || ""}`.toLowerCase().includes(q);
+      const multiParentLabel = multiParent
+        ? (row[multiParent.field] || []).map((v) => multiParent.options.find((o) => o.value === v)?.label || "").join(" ")
+        : "";
+      return `${row.name || ""} ${row.mobile || ""} ${parentLabel} ${multiParentLabel} ${row.contractorType || ""}`.toLowerCase().includes(q);
     });
-  }, [rows, search, parent]);
+  }, [rows, search, parent, multiParent]);
 
   const masterTypeSuggestions = useMemo(() => {
     if (!showMasterType) return [];
@@ -224,7 +287,7 @@ const PersonManager = ({
   }, [rows, showMasterType]);
 
   const commitDraft = async () => {
-    if (!draft.name.trim() || (parent && !draft[parent.field]) || adding) return;
+    if (!draft.name.trim() || (parent && !draft[parent.field]) || (multiParent && draft[multiParent.field].length === 0) || adding) return;
     setAdding(true);
     try {
       await onAdd(draft);
@@ -247,7 +310,7 @@ const PersonManager = ({
   };
 
   const colCount =
-    1 + (parent ? 1 : 0) + (showMobile ? 1 : 0) + (showMasterType ? 1 : 0) + (showDocs ? 3 : 0) + (showOpeningBalance ? 1 : 0) + 1;
+    1 + (parent ? 1 : 0) + (multiParent ? 1 : 0) + (showMobile ? 1 : 0) + (showMasterType ? 1 : 0) + (showDocs ? 3 : 0) + (showOpeningBalance ? 1 : 0) + 1;
 
   return (
     <div>
@@ -273,6 +336,7 @@ const PersonManager = ({
       <thead>
         <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
           {parent && <th className="px-3 py-2 font-medium">{parent.label}</th>}
+          {multiParent && <th className="px-3 py-2 font-medium">{multiParent.label}</th>}
           <th className="px-3 py-2 font-medium">Name</th>
           {showMobile && <th className="px-3 py-2 font-medium">Mobile</th>}
           {showMasterType && <th className="px-3 py-2 font-medium">Master</th>}
@@ -303,6 +367,17 @@ const PersonManager = ({
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
+            </td>
+          )}
+          {multiParent && (
+            <td className="px-3 py-2">
+              <MultiSelectDropdown
+                options={multiParent.options}
+                selected={draft[multiParent.field]}
+                onChange={(vals) => setDraft((d) => ({ ...d, [multiParent.field]: vals }))}
+                placeholder={`Choose ${multiParent.label.toLowerCase()}…`}
+                disabled={adding}
+              />
             </td>
           )}
           <td className="px-3 py-2">
@@ -402,6 +477,21 @@ const PersonManager = ({
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
+                </td>
+              ))}
+            {multiParent &&
+              (readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">
+                  {(row[multiParent.field] || []).map((v) => multiParent.options.find((o) => o.value === v)?.label || v).join(", ") || "—"}
+                </td>
+              ) : (
+                <td className="px-3 py-2">
+                  <MultiSelectDropdown
+                    options={multiParent.options}
+                    selected={row[multiParent.field] || []}
+                    onChange={(vals) => saveField(row._id, multiParent.field, vals)}
+                    placeholder="—"
+                  />
                 </td>
               ))}
             {readOnly ? (
@@ -935,6 +1025,109 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
   );
 };
 
+// Merge duplicate per-mill Contractor records into one (22 Sep, per Rishi's
+// notebook: a contractor like Jamir who covers several mills used to need a
+// separate Contractor record per mill, splitting his Work Log/Payments/
+// Report into disconnected entries for the same real person — multi-mill
+// picking above fixes that for NEW contractors, this fixes it for any
+// already-split ones). Deliberately manual: Rishi picks one "keep this one"
+// primary plus the duplicate(s) to fold into it and confirms — nothing here
+// ever runs on its own. Only shown to the account owner (mirrors the
+// backend's requireOwner on POST /labour/contractors/merge).
+const ContractorMergeTool = ({ contractors, onMerged }) => {
+  const [open, setOpen] = useState(false);
+  const [primaryId, setPrimaryId] = useState("");
+  const [duplicateIds, setDuplicateIds] = useState([]);
+  const [merging, setMerging] = useState(false);
+
+  if (contractors.length < 2) return null;
+
+  const duplicateOptions = contractors.filter((c) => c._id !== primaryId).map((c) => ({ value: c._id, label: c.name }));
+  const primary = contractors.find((c) => c._id === primaryId);
+  const duplicates = contractors.filter((c) => duplicateIds.includes(c._id));
+
+  const reset = () => {
+    setPrimaryId("");
+    setDuplicateIds([]);
+  };
+
+  const handleMerge = async () => {
+    if (!primaryId || duplicateIds.length === 0 || merging) return;
+    const names = duplicates.map((d) => d.name).join(", ");
+    if (
+      !window.confirm(
+        `Merge ${names} into "${primary?.name}"?\n\nAll their Work Log entries and Payments move onto "${primary?.name}", their mills and opening balance get added onto it, and the duplicate contractor record(s) are removed. This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setMerging(true);
+    try {
+      const result = await mergeContractors(primaryId, duplicateIds);
+      reset();
+      setOpen(false);
+      await onMerged();
+      alert(
+        `Merged into "${result.contractor.name}" — moved ${result.movedWageEntries} work log entries and ${result.movedPayments} payments, removed ${result.removedDuplicates} duplicate contractor(s).`
+      );
+    } catch (err) {
+      alert(err.message || "Failed to merge contractors");
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  return (
+    <div className="px-3 pb-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
+      >
+        <FiGitMerge size={13} />
+        Same contractor listed more than once? Merge duplicates
+      </button>
+      {open && (
+        <div className="mt-2 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-3 flex flex-wrap items-end gap-3 max-w-xl">
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Keep this one (primary)</label>
+            <select
+              value={primaryId}
+              onChange={(e) => {
+                setPrimaryId(e.target.value);
+                setDuplicateIds((ids) => ids.filter((id) => id !== e.target.value));
+              }}
+              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
+            >
+              <option value="">Choose contractor…</option>
+              {contractors.map((c) => (
+                <option key={c._id} value={c._id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Fold these into it (duplicates)</label>
+            <MultiSelectDropdown
+              options={duplicateOptions}
+              selected={duplicateIds}
+              onChange={setDuplicateIds}
+              placeholder={primaryId ? "Choose duplicate(s)…" : "Pick the primary first"}
+              disabled={!primaryId}
+            />
+          </div>
+          <button
+            onClick={handleMerge}
+            disabled={!primaryId || duplicateIds.length === 0 || merging}
+            className="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2"
+          >
+            {merging ? "Merging…" : "Merge"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Collapsible by default — 18 Sep, per Rishi: "all the sections should have
 // switch and one click opens it other clicks close dont make them look open
 // all the time so when we need vehicle details we go in vehicle docs and
@@ -1067,16 +1260,17 @@ const ManageData = () => {
           onUpdate={(id, fields) => updateContractor(id, fields).then(loadData)}
           onDelete={(id) => deleteContractor(id).then(loadData)}
           namePlaceholder="Contractor name"
-          parent={{
-            field: "millId",
-            label: "Mill",
+          multiParent={{
+            field: "millIds",
+            label: "Mills",
             options: mills.map((m) => ({ value: m._id, label: `${m.name} (${m.location})` })),
           }}
           showOpeningBalance
           showMasterType
-          emptyText={mills.length === 0 ? "Add a mill above first." : "No contractors yet — pick a mill and type a name above."}
+          emptyText={mills.length === 0 ? "Add a mill above first." : "No contractors yet — pick their mill(s) and type a name above."}
           readOnly={isStaff}
         />
+        {!isStaff && <ContractorMergeTool contractors={contractors} onMerged={loadData} />}
       </Section>
 
       <Section icon={FiUser} title="Labor">

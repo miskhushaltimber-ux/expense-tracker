@@ -1,6 +1,6 @@
 import {
   listMillsByUser, createMill, updateMillById, deleteMillById,
-  listContractorsByUser, createContractor, updateContractorById, deleteContractorById,
+  listContractorsByUser, createContractor, updateContractorById, deleteContractorById, mergeContractors, parseIdArray,
   listLaborsByUser, createLabor, updateLaborById, deleteLaborById,
   listWageEntriesByUser, createWageEntry, bulkCreateWageEntries, updateWageEntryById, deleteWageEntryById, bulkDeleteWageEntries,
   listPaymentsByUser, createPayment, bulkCreatePayments, updatePaymentById, deletePaymentById, bulkDeletePayments,
@@ -19,11 +19,19 @@ const actorFields = (req) => ({ actorId: req.user.id, actorName: req.user.name, 
 const logFor = (req, action, entity, entityLabel) =>
   logAction({ companyId: req.user.companyId, ...actorFields(req), action, entity, entityLabel });
 
+// millIds (22 Sep, multi-mill contractors): arrives as a JSON-array string or
+// a real array (same tolerance as parseIdArray in labourStore.js) — this
+// re-serializes it to a clean JSON-array string before it's written, same
+// "sanitize on the way in" step serializeCustomFields does for customFields,
+// so a stray comma-separated string or a single non-array value never gets
+// stored verbatim.
+const normalizePersonField = (f, v) => (f === "millIds" ? JSON.stringify(parseIdArray(v)) : v);
+
 // Contractors and labor: identical shape (name, mobile, three documents)
 // plus whatever's in `parentField` (millId / contractorId) and any other
 // plain fields listed in `fields`. Owner-only for add/update/delete (see
 // routes/labourRoutes.js) — these are reference data, not day-to-day entries.
-const makePersonHandlers = ({ listByUser, create, updateById, deleteById, parentField, fields = [], label }) => ({
+const makePersonHandlers = ({ listByUser, create, updateById, deleteById, parentField, fields = [], label, validateExtra }) => ({
   list: async (req, res) => {
     try {
       res.json(await listByUser(req.user.companyId));
@@ -37,10 +45,17 @@ const makePersonHandlers = ({ listByUser, create, updateById, deleteById, parent
     if (parentField && !req.body[parentField]) {
       return res.status(400).json({ message: `${parentField} is required to add a ${label.toLowerCase()}` });
     }
+    // Contractors (22 Sep, multi-mill support): no single required parentField
+    // any more — validateExtra checks "at least one mill" against millIds
+    // instead. Labor still goes through the parentField branch above.
+    if (validateExtra) {
+      const err = validateExtra(req);
+      if (err) return res.status(400).json({ message: err });
+    }
     try {
       const docs = {};
       for (const field of DOC_FIELDS) docs[field] = await storeFieldFile(req, field);
-      const extra = Object.fromEntries(fields.map((f) => [f, req.body[f]]));
+      const extra = Object.fromEntries(fields.map((f) => [f, normalizePersonField(f, req.body[f])]));
       if (parentField) extra[parentField] = req.body[parentField];
       const entity = await create({ userId: req.user.companyId, name: name.trim(), mobile, ...extra, ...docs });
       logFor(req, "created", label.toLowerCase(), entity.name);
@@ -55,7 +70,7 @@ const makePersonHandlers = ({ listByUser, create, updateById, deleteById, parent
       const updates = {};
       if (name !== undefined) updates.name = name;
       if (mobile !== undefined) updates.mobile = mobile;
-      for (const f of fields) if (req.body[f] !== undefined) updates[f] = req.body[f];
+      for (const f of fields) if (req.body[f] !== undefined) updates[f] = normalizePersonField(f, req.body[f]);
       if (parentField && req.body[parentField] !== undefined) updates[parentField] = req.body[parentField];
 
       const existing = (await listByUser(req.user.companyId)).find((e) => e._id === req.params.id);
@@ -166,9 +181,14 @@ const millHandlers = makeSimpleHandlers({
   listByUser: listMillsByUser, create: createMill, updateById: updateMillById, deleteById: deleteMillById,
   fields: ["location", "name"], required: ["location", "name"], label: "Mill",
 });
+// Contractors (22 Sep, multi-mill support): parentField dropped — a
+// contractor can now cover several mills (millIds) instead of exactly one
+// (millId), so "at least one mill" is enforced by validateExtra instead of
+// the generic single-required-parent check.
 const contractorHandlers = makePersonHandlers({
   listByUser: listContractorsByUser, create: createContractor, updateById: updateContractorById, deleteById: deleteContractorById,
-  parentField: "millId", fields: ["openingBalance", "contractorType"], label: "Contractor",
+  parentField: null, fields: ["openingBalance", "contractorType", "millIds"], label: "Contractor",
+  validateExtra: (req) => (parseIdArray(req.body.millIds).length ? null : "Pick at least one mill"),
 });
 const laborHandlers = makePersonHandlers({
   listByUser: listLaborsByUser, create: createLabor, updateById: updateLaborById, deleteById: deleteLaborById,
@@ -197,6 +217,40 @@ export const getContractors = contractorHandlers.list;
 export const addContractor = contractorHandlers.add;
 export const updateContractor = contractorHandlers.update;
 export const deleteContractor = contractorHandlers.remove;
+
+// Merge duplicate per-mill Contractor records into one (22 Sep, per Rishi's
+// notebook: Jamir covering Mill-11/12/13 needed a separate Contractor per
+// mill before, splitting his Work Log/Payments/Report into disconnected
+// entries for the same real person). Manual and explicit only — Rishi picks
+// a primary + one or more duplicates on Manage Data and confirms; nothing
+// here runs automatically. Owner-only (see routes/labourRoutes.js).
+export const mergeContractorsHandler = async (req, res) => {
+  const { primaryId, duplicateIds } = req.body;
+  if (!primaryId || typeof primaryId !== "string") {
+    return res.status(400).json({ message: "primaryId is required" });
+  }
+  const dupIds = Array.isArray(duplicateIds) ? duplicateIds.filter((id) => typeof id === "string" && id.trim()) : [];
+  if (!dupIds.length) {
+    return res.status(400).json({ message: "Pick at least one duplicate contractor to merge" });
+  }
+  if (dupIds.includes(primaryId)) {
+    return res.status(400).json({ message: "The primary contractor can't also be listed as a duplicate" });
+  }
+  try {
+    const result = await mergeContractors(req.user.companyId, primaryId, dupIds);
+    if (result.error === "primary_not_found") return res.status(404).json({ message: "Primary contractor not found" });
+    if (result.error === "no_duplicates_found") return res.status(404).json({ message: "None of the selected duplicates were found" });
+    logFor(
+      req,
+      "updated",
+      "contractor",
+      `${result.contractor.name} — merged ${result.removedDuplicates} duplicate(s), moved ${result.movedWageEntries} wage entries + ${result.movedPayments} payments`
+    );
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Error merging contractors" });
+  }
+};
 
 export const getLabors = laborHandlers.list;
 export const addLabor = laborHandlers.add;

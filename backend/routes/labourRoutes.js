@@ -1,7 +1,7 @@
 import express from "express";
 import {
   getMills, addMill, updateMill, deleteMill,
-  getContractors, addContractor, updateContractor, deleteContractor,
+  getContractors, addContractor, updateContractor, deleteContractor, mergeContractorsHandler,
   getLabors, addLabor, updateLabor, deleteLabor,
   getWageEntries, addWageEntry, updateWageEntry, deleteWageEntry, bulkAddWageEntries, bulkDeleteWageEntriesHandler,
   getPayments, addPayment, updatePayment, deletePayment, bulkAddPayments, bulkDeletePaymentsHandler,
@@ -28,6 +28,7 @@ router.delete("/mills/:id", requireOwner, deleteMill);
 
 router.get("/contractors", getContractors);
 router.post("/contractors", requireOwner, uploadLabourDocs, addContractor);
+router.post("/contractors/merge", requireOwner, mergeContractorsHandler);
 router.put("/contractors/:id", requireOwner, uploadLabourDocs, updateContractor);
 router.delete("/contractors/:id", requireOwner, deleteContractor);
 

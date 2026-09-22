@@ -17,6 +17,14 @@ const toFormData = (data) => {
       if (value && Object.keys(value).length) formData.append("customFields", JSON.stringify(value));
       return;
     }
+    if (key === "millIds") {
+      // 22 Sep, multi-mill contractors — an array can't ride in a form field
+      // as-is (it'd stringify to "id1,id2"), so it goes over as JSON text,
+      // same trick as customFields above; backend's parseIdArray reads it
+      // back out.
+      formData.append("millIds", JSON.stringify(Array.isArray(value) ? value : []));
+      return;
+    }
     if (value !== undefined && value !== null) formData.append(key, value);
   });
   return formData;
@@ -115,6 +123,18 @@ export const fetchContractors = contractors.fetch;
 export const addContractor = contractors.add;
 export const updateContractor = contractors.update;
 export const deleteContractor = contractors.remove;
+
+// Merge duplicate per-mill Contractor records into one (22 Sep, per Rishi's
+// notebook) — manual/explicit only, see labourController.js's
+// mergeContractorsHandler for the full reasoning.
+export const mergeContractors = async (primaryId, duplicateIds) => {
+  try {
+    const res = await apiClient.post("/labour/contractors/merge", { primaryId, duplicateIds });
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to merge contractors.");
+  }
+};
 
 export const fetchLabors = labors.fetch;
 export const addLabor = labors.add;

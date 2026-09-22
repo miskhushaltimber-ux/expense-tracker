@@ -157,27 +157,52 @@ const ExpenseDraftRow = ({
       if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
     }
 
+    // Optimistic insert (22 Sep, per Rishi's report of a 1-2s freeze on
+    // Enter — see Expenses.jsx's DraftRow for the full reasoning). The row
+    // appears and the draft resets INSTANTLY; the real saved row swaps in
+    // once the server responds, and rolls back if the save fails.
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const submittedDraft = expenseDraft;
+    setExpenses((prev) => [
+      {
+        _id: tempId,
+        date: submittedDraft.date,
+        expense: submittedDraft.expense.trim(),
+        amount: Number(submittedDraft.amount),
+        master: submittedDraft.master.trim(),
+        billFile: null,
+        vehicleId: submittedDraft.vehicleId,
+        litres: isFuelMaster(submittedDraft.master) ? submittedDraft.litres : "",
+        odometer: isFuelMaster(submittedDraft.master) ? submittedDraft.odometer : "",
+        customFields: submittedDraft.customFields,
+        _pending: true,
+      },
+      ...prev,
+    ]);
+    // Keep the vehicle selected — logging several expenses for the same
+    // truck in a row is the common case, so only the rest of the row resets.
+    setExpenseDraft({ ...emptyExpenseDraft(), vehicleId: submittedDraft.vehicleId });
+    focusExpenseCell("draft", "expense");
+
     try {
       setSavingExpenseDraft(true);
       const saved = await addExpense({
-        date: expenseDraft.date,
-        expense: expenseDraft.expense.trim(),
-        amount: Number(expenseDraft.amount),
-        master: expenseDraft.master.trim(),
-        bill: expenseDraft.billFileObj || undefined,
-        vehicleId: expenseDraft.vehicleId,
-        litres: isFuelMaster(expenseDraft.master) ? expenseDraft.litres : "",
-        odometer: isFuelMaster(expenseDraft.master) ? expenseDraft.odometer : "",
-        customFields: expenseDraft.customFields,
+        date: submittedDraft.date,
+        expense: submittedDraft.expense.trim(),
+        amount: Number(submittedDraft.amount),
+        master: submittedDraft.master.trim(),
+        bill: submittedDraft.billFileObj || undefined,
+        vehicleId: submittedDraft.vehicleId,
+        litres: isFuelMaster(submittedDraft.master) ? submittedDraft.litres : "",
+        odometer: isFuelMaster(submittedDraft.master) ? submittedDraft.odometer : "",
+        customFields: submittedDraft.customFields,
       });
-      setExpenses((prev) => [saved, ...prev]);
-      // Keep the vehicle selected — logging several expenses for the same
-      // truck in a row is the common case, so only the rest of the row resets.
-      setExpenseDraft({ ...emptyExpenseDraft(), vehicleId: expenseDraft.vehicleId });
+      setExpenses((prev) => prev.map((e) => (e._id === tempId ? saved : e)));
       notifySuccess("Expense added");
-      focusExpenseCell("draft", "expense");
     } catch (err) {
-      notifyError(err.message || "Failed to add expense");
+      setExpenses((prev) => prev.filter((e) => e._id !== tempId));
+      setExpenseDraft(submittedDraft);
+      notifyError(err.message || "Failed to add expense — restored it to the draft row above");
     } finally {
       setSavingExpenseDraft(false);
     }
@@ -751,7 +776,7 @@ const Vehicles = () => {
 
   const saveExpenseRow = async (id) => {
     const row = expenses.find((e) => e._id === id);
-    if (!row) return;
+    if (!row || row._pending) return; // still-saving optimistic row — no real id to PATCH yet
     if (!row.vehicleId || !row.expense || !row.amount || !row.master) {
       notifyError("Vehicle, expense, amount and master can't be left blank");
       loadData();
@@ -777,6 +802,7 @@ const Vehicles = () => {
   // number save on blur — same rule as the main Expense Sheet. One-field
   // PATCH; the backend merges it onto the row's existing customFields.
   const saveCustomField = async (id, key, value) => {
+    if (id.startsWith("temp-")) return;
     try {
       await updateExpense(id, { customFields: { [key]: value } });
     } catch (err) {
@@ -799,7 +825,7 @@ const Vehicles = () => {
   };
 
   const handleExpenseRowBillChange = async (id, file) => {
-    if (!file) return;
+    if (!file || id.startsWith("temp-")) return;
     try {
       const updated = await updateExpense(id, { bill: file });
       setExpenses((prev) => prev.map((e) => (e._id === id ? updated : e)));
@@ -810,6 +836,7 @@ const Vehicles = () => {
   };
 
   const handleDeleteExpenseRow = async (id) => {
+    if (id.startsWith("temp-")) return;
     try {
       await deleteExpense(id);
       setExpenses((prev) => prev.filter((e) => e._id !== id));
@@ -824,11 +851,14 @@ const Vehicles = () => {
   const renderExpenseRow = (row) => (
     <tr
       key={row._id}
-      className={`divide-x divide-gray-200 dark:divide-gray-700 ${
+      className={`divide-x divide-gray-200 dark:divide-gray-700 ${row._pending ? "opacity-50" : ""} ${
         selectedIds.has(row._id) ? "bg-red-50/60 dark:bg-red-900/20" : "hover:bg-gray-50 dark:hover:bg-gray-900"
       }`}
     >
       <td className="px-3 py-2">
+        {row._pending ? (
+          <div className="h-4 w-4 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-red-500 animate-spin" title="Saving…" />
+        ) : (
         <input
           type="checkbox"
           checked={selectedIds.has(row._id)}
@@ -836,10 +866,12 @@ const Vehicles = () => {
           aria-label="Select this row"
           className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
         />
+        )}
       </td>
       <td className="px-2 py-2">
         <input
           ref={setExpenseCellRef(row._id, "date")}
+          disabled={row._pending}
           type="date"
           value={row.date ? new Date(row.date).toISOString().split("T")[0] : ""}
           onChange={(e) => updateExpenseField(row._id, "date", e.target.value)}
@@ -983,9 +1015,11 @@ const Vehicles = () => {
         )}
       </td>
       <td className="px-2 py-2 text-center">
+        {!row._pending && (
         <button onClick={() => handleDeleteExpenseRow(row._id)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete row">
           <FiTrash2 size={16} />
         </button>
+        )}
       </td>
     </tr>
   );

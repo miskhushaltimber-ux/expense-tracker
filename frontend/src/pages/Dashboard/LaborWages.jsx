@@ -94,7 +94,7 @@ const combineDateRange = (from, to) => {
 // ledger, existing rows included, which is what got slower and slower as a
 // contractor's history grew. Typing now only re-renders this one small row;
 // LedgerSheet's existing-row list is completely untouched by it.
-const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete }) => {
+const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete, setRows }) => {
   const emptyDraft = () => ({
     contractorId: "",
     ...(isRange ? { dateFrom: "", dateTo: "" } : { date: "" }),
@@ -119,15 +119,40 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
   const commit = async () => {
     const dateValue = isRange ? combineDateRange(draft.dateFrom, draft.dateTo) : draft.date.trim();
     if (!dateValue || !draft.contractorId) return;
+
+    // Optimistic insert (22 Sep, per Rishi: hitting Enter used to visibly
+    // freeze for 1-2s before the row appeared — because LaborWages used to
+    // reload the WHOLE ledger from the server after every add. Now the row
+    // appears and the draft resets INSTANTLY; the real saved row (with its
+    // real id) quietly swaps in once the server responds, and rolls back —
+    // draft restored, nothing lost — if the save actually fails.
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const submittedDraft = draft;
+    const tempAmount = computeAmount ? computeAmount(submittedDraft) : Number(submittedDraft.amount || 0);
+    const tempRow = {
+      _id: tempId,
+      contractorId: submittedDraft.contractorId,
+      date: dateValue,
+      dateLabel: dateValue,
+      ...Object.fromEntries(fields.map((f) => [f.key, submittedDraft[f.key]])),
+      amount: tempAmount,
+      customFields: submittedDraft.customFields,
+      _pending: true,
+    };
+    setRows((prev) => [tempRow, ...prev]);
+    setDraft(emptyDraft());
+    // Same as the Expense Sheet/Vehicle Expense Sheet draft rows: after a
+    // successful add, put focus back on the first field so a fast typist
+    // can keep logging entries back-to-back without reaching for the mouse.
+    setTimeout(() => fieldRefs.current[FIELD_ORDER[0]]?.focus(), 0);
+
     try {
-      await onAdd({ ...draft, date: dateValue });
-      setDraft(emptyDraft());
-      // Same as the Expense Sheet/Vehicle Expense Sheet draft rows: after a
-      // successful add, put focus back on the first field so a fast typist
-      // can keep logging entries back-to-back without reaching for the mouse.
-      setTimeout(() => fieldRefs.current[FIELD_ORDER[0]]?.focus(), 0);
+      const saved = await onAdd({ ...submittedDraft, date: dateValue });
+      setRows((prev) => prev.map((r) => (r._id === tempId ? saved : r)));
     } catch (err) {
-      alert(err.message);
+      setRows((prev) => prev.filter((r) => r._id !== tempId));
+      setDraft(submittedDraft);
+      alert(err.message || "Failed to add — restored it to the row above");
     }
   };
   const handleRowBlur = useRowCommit(rowRef, commit);
@@ -235,6 +260,7 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
 
 const LedgerSheet = ({
   rows,
+  setRows, // (updater) => void — the parent's wageEntries/payments state setter, used for the draft row's optimistic insert (22 Sep, performance fix)
   contractorOptions,
   dateLabel,
   dateMode = "single", // "single" | "range"
@@ -286,7 +312,7 @@ const LedgerSheet = ({
       return next;
     });
 
-  const visibleIds = filtered.map((r) => r._id);
+  const visibleIds = filtered.filter((r) => !r._pending).map((r) => r._id);
   const selectedVisibleCount = visibleIds.filter((id) => selectedIds.has(id)).length;
   const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
 
@@ -414,6 +440,7 @@ const LedgerSheet = ({
           computeAmount={computeAmount}
           onAdd={onAdd}
           onBulkDelete={onBulkDelete}
+          setRows={setRows}
         />
 
         {filtered.length === 0 && (
@@ -432,7 +459,7 @@ const LedgerSheet = ({
           return (
             <tr
               key={row._id}
-              className={`border-b divide-x divide-gray-200 dark:divide-gray-700 ${
+              className={`border-b divide-x divide-gray-200 dark:divide-gray-700 ${row._pending ? "opacity-50" : ""} ${
                 onBulkDelete && selectedIds.has(row._id)
                   ? "border-gray-100 dark:border-gray-800 bg-red-50/60 dark:bg-red-900/20"
                   : "border-gray-100 dark:border-gray-800"
@@ -440,13 +467,17 @@ const LedgerSheet = ({
             >
               {onBulkDelete && (
                 <td className="px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(row._id)}
-                    onChange={() => toggleSelected(row._id)}
-                    aria-label="Select this row"
-                    className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
-                  />
+                  {row._pending ? (
+                    <div className="h-4 w-4 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-red-500 animate-spin" title="Saving…" />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(row._id)}
+                      onChange={() => toggleSelected(row._id)}
+                      aria-label="Select this row"
+                      className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+                    />
+                  )}
                 </td>
               )}
               <td className="px-3 py-2" colSpan={dateCols}>{row.date || row.dateLabel}</td>
@@ -462,9 +493,11 @@ const LedgerSheet = ({
               ))}
               {computeAmount && <td className="px-3 py-2 font-medium">{renderAmount(row)}</td>}
               <td className="px-3 py-2">
-                <button onClick={() => onDelete(row._id)} title="Delete" className="text-gray-300 dark:text-gray-500 hover:text-red-600">
-                  <FiTrash2 size={14} />
-                </button>
+                {!row._pending && (
+                  <button onClick={() => onDelete(row._id)} title="Delete" className="text-gray-300 dark:text-gray-500 hover:text-red-600">
+                    <FiTrash2 size={14} />
+                  </button>
+                )}
               </td>
             </tr>
           );
@@ -685,22 +718,26 @@ const LaborWages = () => {
   }, []);
 
   // "Ramesh (Mill No-01, KTPL I)" — enough to tell two same-named
-  // contractors at different mills apart without leaving this page.
+  // contractors at different mills apart without leaving this page. A
+  // contractor covering several mills (22 Sep, multi-mill support — e.g.
+  // Jamir on Mill-11/12/13) lists all of them instead of just one.
   const contractorOptions = useMemo(() => {
     const millsById = new Map(mills.map((m) => [m._id, m]));
     return contractors.map((c) => {
-      const mill = millsById.get(c.millId);
+      const millList = (c.millIds || []).map((id) => millsById.get(id)).filter(Boolean);
+      const millLabel =
+        millList.length === 0 ? "" : millList.length === 1 ? `${millList[0].name}, ${millList[0].location}` : millList.map((m) => m.name).join("/");
       // master (21 Sep, per Rishi: "add one master column in labour wages
       // sheet in workflow and payment sub split pages both") — carried along
       // here so LedgerSheet can show it without a separate lookup.
-      return { value: c._id, label: mill ? `${c.name} (${mill.name}, ${mill.location})` : c.name, master: c.contractorType || "" };
+      return { value: c._id, label: millLabel ? `${c.name} (${millLabel})` : c.name, master: c.contractorType || "" };
     });
   }, [contractors, mills]);
 
   const allowedContractorIds = useMemo(() => {
     if (!filterMill && filterContractors.length === 0) return null;
     let ids = contractors.map((c) => c._id);
-    if (filterMill) ids = ids.filter((id) => contractors.find((c) => c._id === id)?.millId === filterMill);
+    if (filterMill) ids = ids.filter((id) => (contractors.find((c) => c._id === id)?.millIds || []).includes(filterMill));
     if (filterContractors.length > 0) ids = ids.filter((id) => filterContractors.includes(id));
     return new Set(ids);
   }, [contractors, filterMill, filterContractors]);
@@ -852,6 +889,7 @@ const LaborWages = () => {
           <div className="min-w-[720px]">
             <LedgerSheet
               rows={wageEntries}
+              setRows={setWageEntries}
               contractorOptions={contractorOptions}
               dateLabel="Period"
               dateMode="range"
@@ -862,13 +900,18 @@ const LaborWages = () => {
               computeAmount={(d) => (d.cft && d.rate ? Number(d.cft) * Number(d.rate) : null)}
               renderAmount={(row) => money(row.amount)}
               onAdd={(draft) =>
+                // No more `.then(loadData)` here (22 Sep, performance fix) —
+                // that used to re-fetch the WHOLE work log after every single
+                // add, which is what made Enter feel like it froze for 1-2s.
+                // DraftRow now does its own optimistic insert via setRows and
+                // just needs the saved entity back to replace its temp row.
                 addWageEntry({
                   contractorId: draft.contractorId,
                   dateLabel: draft.date,
                   cft: draft.cft,
                   rate: draft.rate,
                   customFields: draft.customFields,
-                }).then(loadData)
+                })
               }
               onDelete={(id) => deleteWageEntry(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeleteWageEntries(ids).then(loadData)}
@@ -909,6 +952,7 @@ const LaborWages = () => {
           <div className="min-w-[640px]">
             <LedgerSheet
               rows={payments}
+              setRows={setPayments}
               contractorOptions={contractorOptions}
               dateLabel="Date"
               dateType="date"
@@ -917,13 +961,15 @@ const LaborWages = () => {
                 { key: "amount", label: "Amount", placeholder: "Amount", type: "number", width: 100, format: money },
               ]}
               onAdd={(draft) =>
+                // Same optimistic-insert change as Work Log above — no more
+                // `.then(loadData)` reloading everything after each add.
                 addPayment({
                   contractorId: draft.contractorId,
                   date: draft.date,
                   label: draft.label,
                   amount: draft.amount,
                   customFields: draft.customFields,
-                }).then(loadData)
+                })
               }
               onDelete={(id) => deletePayment(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeletePayments(ids).then(loadData)}
