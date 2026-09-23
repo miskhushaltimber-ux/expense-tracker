@@ -3,7 +3,7 @@
 // parameterized by `type` ("worklog" | "payments") instead of having one
 // hardcoded shape, since there are two ledgers here instead of one.
 import { listWageEntriesByUser, listPaymentsByUser, listContractorsByUser } from "../models/labourStore.js";
-import { isGoogleSheetsConfigured, exportWorkLogToSheet, exportPaymentsToSheet, readSheetValues } from "../utils/googleSheets.js";
+import { isGoogleSheetsConfigured, exportWorkLogToSheet, exportPaymentsToSheet, exportCombinedLabourToSheet, readSheetValues } from "../utils/googleSheets.js";
 import { parseWorkLogValuesToPreview, parsePaymentValuesToPreview } from "../utils/labourImportParser.js";
 import { buildWorkLogWorkbook, buildPaymentsWorkbook, buildCombinedLabourWorkbook, labourFileName } from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendLabourSheetEmail } from "../utils/mailer.js";
@@ -26,6 +26,21 @@ export const exportLabourToSheet = async (req, res) => {
   try {
     const contractors = await listContractorsByUser(req.user.companyId);
     const contractorsById = new Map(contractors.map((c) => [c._id, c]));
+
+    // 23 Sep — this "combined" branch used to not exist at all, so picking
+    // it silently fell through to whichever tab's hardcoded type ("worklog"
+    // or "payments") the Share Sheet modal was opened from — exactly the
+    // bug Rishi reported ("it just prints the worklog page or payment page
+    // and dont print both combined").
+    if (type === "combined") {
+      const [wageEntries, payments] = await Promise.all([
+        listWageEntriesByUser(req.user.companyId),
+        listPaymentsByUser(req.user.companyId),
+      ]);
+      await exportCombinedLabourToSheet(sheetUrl, wageEntries, payments, contractorsById);
+      const total = wageEntries.length + payments.length;
+      return res.json({ message: `Exported ${wageEntries.length} work log entries + ${payments.length} payments (${total} rows) to the Google Sheet`, count: total });
+    }
 
     if (type === "payments") {
       const payments = (await listPaymentsByUser(req.user.companyId)).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -54,7 +69,23 @@ export const emailLabourSheet = async (req, res) => {
     const contractorsById = new Map(contractors.map((c) => [c._id, c]));
 
     let buffer, count, total;
-    if (type === "payments") {
+    // 23 Sep — same missing branch as exportLabourToSheet above: "combined"
+    // used to fall through to the `else` (worklog-only) case here, so
+    // emailing "combined" silently sent just the work log, never payments.
+    if (type === "combined") {
+      const [wageEntries, payments] = await Promise.all([
+        listWageEntriesByUser(req.user.companyId),
+        listPaymentsByUser(req.user.companyId),
+      ]);
+      if (wageEntries.length === 0 && payments.length === 0) {
+        return res.status(400).json({ message: "There are no work log entries or payments to send yet" });
+      }
+      buffer = await buildCombinedLabourWorkbook(wageEntries, payments, contractorsById);
+      count = wageEntries.length + payments.length;
+      total =
+        wageEntries.reduce((sum, w) => sum + (Number(w.amount) || 0), 0) +
+        payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    } else if (type === "payments") {
       const payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
       if (payments.length === 0) return res.status(400).json({ message: "There are no payments to send yet" });
       buffer = await buildPaymentsWorkbook(payments, contractorsById);

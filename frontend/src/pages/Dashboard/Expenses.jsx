@@ -22,6 +22,7 @@ import AlertsStrip, { buildExpenseAlerts, buildBudgetAlerts } from "/src/compone
 import { fetchBudgets, saveBudgets } from "/src/api/budgets";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
+import DownloadMenu from "/src/components/DownloadMenu";
 import { fetchVehicles } from "/src/api/vehicles";
 import { looksLikeVehicleExpense, findPossibleDuplicate, duplicateWarning } from "/src/utils/vehicleExpense";
 import {
@@ -29,7 +30,6 @@ import {
   FiTrash2,
   FiPaperclip,
   FiUploadCloud,
-  FiDownload,
   FiGrid,
   FiX,
   FiCheck,
@@ -922,21 +922,18 @@ const Expenses = () => {
             >
               <FiUploadCloud size={17} className="mr-2" /> Import
             </button>
-            <button
-              onClick={handleExportCsv}
-              className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"
-              title="Download as a .csv file (opens in Excel or Google Sheets)"
-            >
-              <FiDownload size={17} className="mr-2" /> Download CSV
-            </button>
-            <button
-              onClick={handleDownloadXlsx}
-              disabled={downloadingXlsx}
-              className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium disabled:opacity-60"
-              title="Download a formatted .xlsx report — ready to print or send"
-            >
-              <FiDownload size={17} className="mr-2" /> {downloadingXlsx ? "Preparing..." : "Download Excel"}
-            </button>
+            <DownloadMenu
+              options={[
+                { key: "csv", label: "Download CSV", description: "Opens in Excel or Google Sheets", onClick: handleExportCsv },
+                {
+                  key: "xlsx",
+                  label: "Download Excel",
+                  description: "Formatted report — ready to print or send",
+                  onClick: handleDownloadXlsx,
+                  busy: downloadingXlsx,
+                },
+              ]}
+            />
             <button
               onClick={() => setShowExportModal(true)}
               className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"

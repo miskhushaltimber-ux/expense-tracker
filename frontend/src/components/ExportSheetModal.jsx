@@ -20,9 +20,17 @@ const ExportSheetModal = ({
   onExport,
   emailDescription = "Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose \"Open with Google Sheets\".",
   sheetDescription = "For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced.",
+  // scopeOptions (23 Sep, per Rishi: "when i share... using combined switch
+  // it just prints the worklog page or payment page and dont print both
+  // combined") — Labor Wages passes [{key,label}] so this ONE modal can also
+  // offer "combined" (Work Log + Payments together), not just whichever tab
+  // it was opened from. Omitted entirely by Expenses/Vehicles, which only
+  // ever have one sheet to share — nothing changes for them.
+  scopeOptions,
 }) => {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("email"); // "email" | "sheet"
+  const [scope, setScope] = useState(scopeOptions?.[0]?.key || null);
 
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
@@ -42,7 +50,7 @@ const ExportSheetModal = ({
     }
     try {
       setSending(true);
-      const result = await onEmail(email.trim(), note.trim());
+      const result = await onEmail(email.trim(), note.trim(), scope);
       notifySuccess(result?.message || "Sheet emailed");
       onClose();
     } catch (err) {
@@ -59,7 +67,7 @@ const ExportSheetModal = ({
     }
     try {
       setExporting(true);
-      const result = await onExport(sheetUrl.trim());
+      const result = await onExport(sheetUrl.trim(), scope);
       notifySuccess(result?.message || "Exported to Google Sheet");
     } catch (err) {
       notifyError(err.message || "Failed to export");
@@ -84,6 +92,27 @@ const ExportSheetModal = ({
             <FiX size={20} />
           </button>
         </div>
+
+        {scopeOptions && scopeOptions.length > 0 && (
+          <div className="mb-4">
+            <label className="block text-xs font-medium mb-1.5 text-gray-500 dark:text-gray-400">What to share</label>
+            <div className="flex flex-wrap gap-2">
+              {scopeOptions.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => setScope(o.key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${
+                    scope === o.key
+                      ? "bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-700 text-red-700 dark:text-red-300"
+                      : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-2 mb-4">
           <button onClick={() => setMode("email")} className={tabClass(mode === "email")}>

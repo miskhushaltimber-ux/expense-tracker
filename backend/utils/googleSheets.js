@@ -18,6 +18,7 @@ export const extractSheetId = (urlOrId) => {
 const SHEET_HEADER = ["Date", "Expense", "Amount", "Master", "Bill"];
 const WORK_LOG_HEADER = ["Contractor", "Date", "CFT", "Rate", "Amount"];
 const PAYMENTS_HEADER = ["Contractor", "Date", "Label", "Amount"];
+const COMBINED_LABOUR_HEADER = ["Type", "Contractor", "Date", "Details", "Amount"];
 
 // Generic full-sheet writer, shared by exportExpensesToSheet and the Labor
 // Wages exporters below — overwrites the target sheet's first tab with the
@@ -79,6 +80,34 @@ export const exportPaymentsToSheet = async (sheetIdOrUrl, payments, contractorsB
     Number(p.amount) || 0,
   ]);
   return writeRowsToSheet(sheetIdOrUrl, PAYMENTS_HEADER, rows);
+};
+
+// 23 Sep, per Rishi: "when i share... using combined switch it just prints
+// the worklog page or payment page and dont print both combined" — this
+// combined path genuinely didn't exist before (exportLabourToSheet only
+// ever branched on "payments" vs "worklog"). A Google Sheet only has ONE
+// tab this feature writes to (see writeRowsToSheet's header comment), so
+// "combined" here means both ledgers in that one tab, tagged by a Type
+// column — same shape as the existing "Download Combined CSV" button, just
+// pushed to a live Sheet instead of downloaded.
+export const exportCombinedLabourToSheet = async (sheetIdOrUrl, wageEntries, payments, contractorsById = new Map()) => {
+  const rows = [
+    ...wageEntries.map((w) => [
+      "Work Log",
+      contractorsById.get(w.contractorId)?.name || "",
+      w.dateLabel || "",
+      `${Number(w.cft) || 0} CFT × ₹${Number(w.rate) || 0}`,
+      Number(w.amount) || 0,
+    ]),
+    ...payments.map((p) => [
+      "Payment",
+      contractorsById.get(p.contractorId)?.name || "",
+      p.date || "",
+      p.label || "",
+      Number(p.amount) || 0,
+    ]),
+  ];
+  return writeRowsToSheet(sheetIdOrUrl, COMBINED_LABOUR_HEADER, rows);
 };
 
 // Reads every value out of the target sheet's first tab as a raw 2D array

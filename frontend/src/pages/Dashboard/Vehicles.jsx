@@ -15,6 +15,7 @@ import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import ImportSheetModal from "/src/components/ImportSheetModal";
 import ExportSheetModal from "/src/components/ExportSheetModal";
 import { CustomCell, ManageColumnsButton } from "/src/components/CustomColumns";
+import DownloadMenu from "/src/components/DownloadMenu";
 import { fetchColumns } from "/src/api/columns";
 import { findPossibleDuplicate, duplicateWarning } from "/src/utils/vehicleExpense";
 import {
@@ -28,7 +29,6 @@ import {
   FiXCircle,
   FiAlertTriangle,
   FiUploadCloud,
-  FiDownload,
   FiGrid,
 } from "react-icons/fi";
 import { ToastContainer, toast } from "react-toastify";
@@ -1231,21 +1231,18 @@ const Vehicles = () => {
               >
                 <FiUploadCloud size={17} className="mr-2" /> Import
               </button>
-              <button
-                onClick={handleExportVehicleCsv}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"
-                title="Download as a .csv file (opens in Excel or Google Sheets)"
-              >
-                <FiDownload size={17} className="mr-2" /> Download CSV
-              </button>
-              <button
-                onClick={handleDownloadVehicleXlsx}
-                disabled={downloadingVehicleXlsx}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium disabled:opacity-60"
-                title="Download a formatted .xlsx report — ready to print or send"
-              >
-                <FiDownload size={17} className="mr-2" /> {downloadingVehicleXlsx ? "Preparing..." : "Download Excel"}
-              </button>
+              <DownloadMenu
+                options={[
+                  { key: "csv", label: "Download CSV", description: "Opens in Excel or Google Sheets", onClick: handleExportVehicleCsv },
+                  {
+                    key: "xlsx",
+                    label: "Download Excel",
+                    description: "Formatted report — ready to print or send",
+                    onClick: handleDownloadVehicleXlsx,
+                    busy: downloadingVehicleXlsx,
+                  },
+                ]}
+              />
               <button
                 onClick={() => setShowVehicleExportModal(true)}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"

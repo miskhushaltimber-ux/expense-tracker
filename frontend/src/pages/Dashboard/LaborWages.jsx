@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FiTrash2, FiSearch, FiFilter, FiXCircle, FiUploadCloud, FiDownload, FiGrid, FiFileText, FiCalendar } from "react-icons/fi";
+import { FiTrash2, FiSearch, FiFilter, FiXCircle, FiUploadCloud, FiGrid, FiFileText, FiCalendar } from "react-icons/fi";
 import {
   fetchMills,
   fetchContractors,
@@ -21,6 +21,7 @@ import { downloadCsv } from "../../utils/exportCsv";
 import ImportSheetModal from "../../components/ImportSheetModal";
 import ExportSheetModal from "../../components/ExportSheetModal";
 import { CustomCell, ManageColumnsButton } from "../../components/CustomColumns";
+import DownloadMenu from "../../components/DownloadMenu";
 import { fetchColumns } from "../../api/columns";
 
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -684,15 +685,25 @@ const paymentStatus = (contractor, wageEntries, payments, balance) => {
     : { key: "yellow", label: "Pending" };
 };
 
+// 23 Sep, per Rishi: "colours just mix up with the background" — the
+// original row tints were a near-transparent 20% overlay in dark mode
+// (bg-green-900/20 etc.), which barely showed up against the card's own
+// dark-gray background, and the status badge used the same light tint +
+// colored text as the row it sat on top of, so the badge itself blended
+// into the row instead of standing out. Fixed two ways: a solid, saturated
+// LEFT BORDER strip per row (a strong signal that never depends on how it
+// mixes with whatever's behind it) plus a slightly stronger, still-readable
+// background tint; and the badge is now a solid color fill with white text
+// instead of tint-on-tint, so it reads clearly on any row/background.
 const REPORT_ROW_TINT = {
-  green: "bg-green-50/60 dark:bg-green-900/20",
-  yellow: "bg-amber-50/60 dark:bg-amber-900/20",
-  red: "bg-red-50/60 dark:bg-red-900/20",
+  green: "bg-green-50 dark:bg-green-950/40 border-l-4 border-l-green-500",
+  yellow: "bg-amber-50 dark:bg-amber-950/40 border-l-4 border-l-amber-500",
+  red: "bg-red-50 dark:bg-red-950/40 border-l-4 border-l-red-500",
 };
 const REPORT_BADGE = {
-  green: "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300",
-  yellow: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300",
-  red: "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300",
+  green: "bg-green-600 text-white",
+  yellow: "bg-amber-500 text-white",
+  red: "bg-red-600 text-white",
 };
 
 // Redesigned 23 Sep, per Rishi's notebook: "go with this format... looks
@@ -867,7 +878,7 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
                 {rows.map(({ contractor: c, report, stats, status }) => (
                   <tr
                     key={c._id}
-                    className={`border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 transition-colors hover:brightness-95 dark:hover:brightness-110 ${REPORT_ROW_TINT[status.key]}`}
+                    className={`border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.05] ${REPORT_ROW_TINT[status.key]}`}
                   >
                     <td className="px-4 py-3 font-medium text-gray-800 dark:text-gray-100 align-top">{c.name}</td>
                     <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{c.contractorType || "—"}</td>
@@ -916,9 +927,9 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
           </div>
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400 px-4 sm:px-5 py-3 border-t border-gray-100 dark:border-gray-700">
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-400 inline-block" /> Paid up</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" /> Pending</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400 inline-block" /> Delayed (14+ days)</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-600 inline-block" /> Paid up</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> Pending</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-600 inline-block" /> Delayed (14+ days)</span>
           </div>
         </div>
       )}
@@ -1273,36 +1284,31 @@ const LaborWages = () => {
               >
                 <FiUploadCloud size={14} className="mr-1.5" /> Import
               </button>
-              <button
-                onClick={handleExportWorkLogCsv}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
-                title="Download as a .csv file (opens in Excel or Google Sheets)"
-              >
-                <FiDownload size={14} className="mr-1.5" /> Download CSV
-              </button>
-              <button
-                onClick={() => handleDownloadXlsx("worklog", "No work log entries to export yet")}
-                disabled={downloadingXlsxType === "worklog"}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
-                title="Download a formatted .xlsx report — ready to print or send"
-              >
-                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "worklog" ? "Preparing..." : "Download Excel"}
-              </button>
-              <button
-                onClick={handleExportCombinedCsv}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
-                title="Download Work Log + Payments together as one .csv file"
-              >
-                <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
-              </button>
-              <button
-                onClick={() => handleDownloadXlsx("combined", "No work log entries or payments to export yet")}
-                disabled={downloadingXlsxType === "combined"}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
-                title="Download Work Log + Payments together as one formatted .xlsx (two tabs)"
-              >
-                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "combined" ? "Preparing..." : "Download Combined Excel"}
-              </button>
+              <DownloadMenu
+                options={[
+                  { key: "csv", label: "Download CSV", description: "Work Log only", onClick: handleExportWorkLogCsv },
+                  {
+                    key: "xlsx",
+                    label: "Download Excel",
+                    description: "Work Log only — formatted, ready to print",
+                    onClick: () => handleDownloadXlsx("worklog", "No work log entries to export yet"),
+                    busy: downloadingXlsxType === "worklog",
+                  },
+                  {
+                    key: "combined-csv",
+                    label: "Download Combined CSV",
+                    description: "Work Log + Payments together",
+                    onClick: handleExportCombinedCsv,
+                  },
+                  {
+                    key: "combined-xlsx",
+                    label: "Download Combined Excel",
+                    description: "Work Log + Payments — two tabs, formatted",
+                    onClick: () => handleDownloadXlsx("combined", "No work log entries or payments to export yet"),
+                    busy: downloadingXlsxType === "combined",
+                  },
+                ]}
+              />
               <button
                 onClick={() => setShowWorkLogExportModal(true)}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
@@ -1362,36 +1368,31 @@ const LaborWages = () => {
               >
                 <FiUploadCloud size={14} className="mr-1.5" /> Import
               </button>
-              <button
-                onClick={handleExportPaymentsCsv}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
-                title="Download as a .csv file (opens in Excel or Google Sheets)"
-              >
-                <FiDownload size={14} className="mr-1.5" /> Download CSV
-              </button>
-              <button
-                onClick={() => handleDownloadXlsx("payments", "No payments to export yet")}
-                disabled={downloadingXlsxType === "payments"}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
-                title="Download a formatted .xlsx report — ready to print or send"
-              >
-                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "payments" ? "Preparing..." : "Download Excel"}
-              </button>
-              <button
-                onClick={handleExportCombinedCsv}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
-                title="Download Work Log + Payments together as one .csv file"
-              >
-                <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
-              </button>
-              <button
-                onClick={() => handleDownloadXlsx("combined", "No work log entries or payments to export yet")}
-                disabled={downloadingXlsxType === "combined"}
-                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
-                title="Download Work Log + Payments together as one formatted .xlsx (two tabs)"
-              >
-                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "combined" ? "Preparing..." : "Download Combined Excel"}
-              </button>
+              <DownloadMenu
+                options={[
+                  { key: "csv", label: "Download CSV", description: "Payments only", onClick: handleExportPaymentsCsv },
+                  {
+                    key: "xlsx",
+                    label: "Download Excel",
+                    description: "Payments only — formatted, ready to print",
+                    onClick: () => handleDownloadXlsx("payments", "No payments to export yet"),
+                    busy: downloadingXlsxType === "payments",
+                  },
+                  {
+                    key: "combined-csv",
+                    label: "Download Combined CSV",
+                    description: "Work Log + Payments together",
+                    onClick: handleExportCombinedCsv,
+                  },
+                  {
+                    key: "combined-xlsx",
+                    label: "Download Combined Excel",
+                    description: "Work Log + Payments — two tabs, formatted",
+                    onClick: () => handleDownloadXlsx("combined", "No work log entries or payments to export yet"),
+                    busy: downloadingXlsxType === "combined",
+                  },
+                ]}
+              />
               <button
                 onClick={() => setShowPaymentsExportModal(true)}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
@@ -1495,10 +1496,14 @@ const LaborWages = () => {
           title="Share the Work Log"
           onClose={() => setShowWorkLogExportModal(false)}
           fetchStatus={fetchLabourSheetsStatus}
-          onEmail={(email, note) => emailLabourSheet(email, note, "worklog")}
-          onExport={(sheetUrl) => exportLabourToGoogleSheet(sheetUrl, "worklog")}
-          emailDescription='Sends the Work Log (CFT) as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
-          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with the work log."
+          onEmail={(email, note, scope) => emailLabourSheet(email, note, scope || "worklog")}
+          onExport={(sheetUrl, scope) => exportLabourToGoogleSheet(sheetUrl, scope || "worklog")}
+          emailDescription='Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced."
+          scopeOptions={[
+            { key: "worklog", label: "Work Log only" },
+            { key: "combined", label: "Work Log + Payments (combined)" },
+          ]}
         />
       )}
 
@@ -1551,10 +1556,14 @@ const LaborWages = () => {
           title="Share the Payments Sheet"
           onClose={() => setShowPaymentsExportModal(false)}
           fetchStatus={fetchLabourSheetsStatus}
-          onEmail={(email, note) => emailLabourSheet(email, note, "payments")}
-          onExport={(sheetUrl) => exportLabourToGoogleSheet(sheetUrl, "payments")}
-          emailDescription='Sends the Payments & Advances sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
-          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with the payments sheet."
+          onEmail={(email, note, scope) => emailLabourSheet(email, note, scope || "payments")}
+          onExport={(sheetUrl, scope) => exportLabourToGoogleSheet(sheetUrl, scope || "payments")}
+          emailDescription='Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced."
+          scopeOptions={[
+            { key: "payments", label: "Payments only" },
+            { key: "combined", label: "Work Log + Payments (combined)" },
+          ]}
         />
       )}
     </div>

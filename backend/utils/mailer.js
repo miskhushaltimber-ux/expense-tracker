@@ -181,7 +181,7 @@ export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, 
 // expenses/payments do (it's CFT * rate per row, already summed into
 // `total`), so this shares the same shape but a type-aware subject/label.
 export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, type }) => {
-  const label = type === "payments" ? "payments sheet" : "work log";
+  const label = type === "payments" ? "payments sheet" : type === "combined" ? "work log & payments (combined)" : "work log";
   const money = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
