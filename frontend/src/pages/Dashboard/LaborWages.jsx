@@ -15,7 +15,7 @@ import {
   bulkDeletePayments,
 } from "../../api/labour";
 import { previewLabourImportSheet } from "../../api/imports";
-import { fetchLabourSheetsStatus, exportLabourToGoogleSheet, previewLabourFromGoogleSheet, emailLabourSheet } from "../../api/sheets";
+import { fetchLabourSheetsStatus, exportLabourToGoogleSheet, previewLabourFromGoogleSheet, emailLabourSheet, downloadLabourSheetXlsx } from "../../api/sheets";
 import { FILE_PREFIX } from "../../constants/brand";
 import { downloadCsv } from "../../utils/exportCsv";
 import ImportSheetModal from "../../components/ImportSheetModal";
@@ -875,6 +875,30 @@ const LaborWages = () => {
     );
   };
 
+  // 23 Sep, per Rishi: needs real formatted .xlsx downloads, not just CSV —
+  // same reasoning as Expenses.jsx's handleDownloadXlsx. One shared handler
+  // parameterized by type since all three buttons (Work Log / Payments /
+  // Combined) just hit the same download endpoint with a different type.
+  const [downloadingXlsxType, setDownloadingXlsxType] = useState(null);
+  const handleDownloadXlsx = async (type, emptyMessage) => {
+    const isEmpty =
+      type === "combined" ? wageEntries.length === 0 && payments.length === 0
+      : type === "payments" ? payments.length === 0
+      : wageEntries.length === 0;
+    if (isEmpty) {
+      alert(emptyMessage);
+      return;
+    }
+    try {
+      setDownloadingXlsxType(type);
+      await downloadLabourSheetXlsx(type);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDownloadingXlsxType(null);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [m, c, w, p] = await Promise.all([fetchMills(), fetchContractors(), fetchWageEntries(), fetchPayments()]);
@@ -1055,11 +1079,27 @@ const LaborWages = () => {
                 <FiDownload size={14} className="mr-1.5" /> Download CSV
               </button>
               <button
+                onClick={() => handleDownloadXlsx("worklog", "No work log entries to export yet")}
+                disabled={downloadingXlsxType === "worklog"}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
+                title="Download a formatted .xlsx report — ready to print or send"
+              >
+                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "worklog" ? "Preparing..." : "Download Excel"}
+              </button>
+              <button
                 onClick={handleExportCombinedCsv}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
                 title="Download Work Log + Payments together as one .csv file"
               >
                 <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
+              </button>
+              <button
+                onClick={() => handleDownloadXlsx("combined", "No work log entries or payments to export yet")}
+                disabled={downloadingXlsxType === "combined"}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
+                title="Download Work Log + Payments together as one formatted .xlsx (two tabs)"
+              >
+                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "combined" ? "Preparing..." : "Download Combined Excel"}
               </button>
               <button
                 onClick={() => setShowWorkLogExportModal(true)}
@@ -1125,11 +1165,27 @@ const LaborWages = () => {
                 <FiDownload size={14} className="mr-1.5" /> Download CSV
               </button>
               <button
+                onClick={() => handleDownloadXlsx("payments", "No payments to export yet")}
+                disabled={downloadingXlsxType === "payments"}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
+                title="Download a formatted .xlsx report — ready to print or send"
+              >
+                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "payments" ? "Preparing..." : "Download Excel"}
+              </button>
+              <button
                 onClick={handleExportCombinedCsv}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
                 title="Download Work Log + Payments together as one .csv file"
               >
                 <FiDownload size={14} className="mr-1.5" /> Download Combined CSV
+              </button>
+              <button
+                onClick={() => handleDownloadXlsx("combined", "No work log entries or payments to export yet")}
+                disabled={downloadingXlsxType === "combined"}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium disabled:opacity-60"
+                title="Download Work Log + Payments together as one formatted .xlsx (two tabs)"
+              >
+                <FiDownload size={14} className="mr-1.5" /> {downloadingXlsxType === "combined" ? "Preparing..." : "Download Combined Excel"}
               </button>
               <button
                 onClick={() => setShowPaymentsExportModal(true)}

@@ -39,7 +39,7 @@ export const emailSheet = async (req, res) => {
 
     const ordered = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
     const vehiclesById = new Map(vehicles.map((v) => [v._id, v]));
-    const buffer = buildExpensesWorkbook(ordered, vehiclesById);
+    const buffer = await buildExpensesWorkbook(ordered, vehiclesById);
     const total = ordered.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
 
     await sendExpenseSheetEmail({
@@ -83,6 +83,33 @@ export const exportToSheet = async (req, res) => {
   } catch (error) {
     console.error("Error exporting to Google Sheet:", error.message);
     res.status(400).json({ message: error.message });
+  }
+};
+
+// Streams the same styled workbook emailSheet builds, as a direct file
+// download instead of an email attachment — 23 Sep, per Rishi: "downloaded"
+// used to mean a plain .csv with no formatting at all; this gives the
+// "Download Excel" button on the Expense Sheet / Vehicle Expense Sheet the
+// same professional-looking file the email option already sends.
+export const downloadExpenseSheet = async (req, res) => {
+  const { scope } = req.query;
+
+  try {
+    const [allExpenses, vehicles] = await Promise.all([
+      listExpensesByUser(req.user.companyId),
+      listVehiclesByUser(req.user.companyId).catch(() => []),
+    ]);
+    const expenses = scope === "vehicles" ? allExpenses.filter((e) => e.vehicleId) : allExpenses;
+    const ordered = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const vehiclesById = new Map(vehicles.map((v) => [v._id, v]));
+    const buffer = await buildExpensesWorkbook(ordered, vehiclesById);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${expensesFileName()}"`);
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error("Error building the expense sheet download:", error.message);
+    res.status(400).json({ message: error.message || "Couldn't build that file" });
   }
 };
 

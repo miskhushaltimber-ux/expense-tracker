@@ -52,6 +52,12 @@ const uploadToCloudinary = (file) =>
         resource_type: "auto", // handles images and PDFs alike
         use_filename: true,
         unique_filename: true,
+        access_mode: "public", // 23 Sep, per Rishi: a PDF bill came back "401 deny or
+        // ACL failure" when opened. Cloudinary's real fix is an account-level
+        // toggle (Settings -> Security -> "PDF and ZIP files delivery"), not
+        // something this line alone can override — but setting it explicitly
+        // here is free insurance against a future upload landing as
+        // restricted instead of public.
       },
       (error, result) => (error ? reject(error) : resolve(result.secure_url))
     );

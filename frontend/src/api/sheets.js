@@ -2,6 +2,35 @@ import { apiClient } from "./config";
 
 const BASE_URL = "/sheets";
 
+// Triggers a browser download of a blob response, using the filename the
+// server sent in Content-Disposition (falls back to a generic name if that
+// header is ever missing/blocked).
+const downloadBlobResponse = (response, fallbackName) => {
+  const disposition = response.headers?.["content-disposition"] || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const fileName = match ? match[1] : fallbackName;
+  const url = URL.createObjectURL(response.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+// Downloads the same nicely-formatted .xlsx the "Email it" option sends —
+// 23 Sep, per Rishi: "downloaded" used to mean a plain, unstyled .csv.
+// scope: "vehicles" narrows to the Vehicle Expense Sheet, same as email/export.
+export const downloadExpenseSheetXlsx = async (scope) => {
+  try {
+    const response = await apiClient.get(`${BASE_URL}/download`, { params: { scope }, responseType: "blob" });
+    downloadBlobResponse(response, "expenses.xlsx");
+  } catch (error) {
+    throw new Error("Couldn't download that file. Please try again.");
+  }
+};
+
 // Whether the server has Google Sheets sync configured at all (a service
 // account key set) — lets the UI show a helpful message instead of a
 // confusing error when it isn't.
@@ -94,5 +123,16 @@ export const emailLabourSheet = async (email, note, type) => {
   } catch (error) {
     console.error("Error emailing the labour sheet:", error.response?.data || error);
     throw new Error(error.response?.data?.message || "Failed to send that email.");
+  }
+};
+
+// type: "worklog" | "payments" | "combined" (Work Log + Payments as two tabs
+// in one workbook — the Excel equivalent of "Download Combined CSV").
+export const downloadLabourSheetXlsx = async (type) => {
+  try {
+    const response = await apiClient.get(`${LABOUR_BASE_URL}/download`, { params: { type }, responseType: "blob" });
+    downloadBlobResponse(response, "labour.xlsx");
+  } catch (error) {
+    throw new Error("Couldn't download that file. Please try again.");
   }
 };

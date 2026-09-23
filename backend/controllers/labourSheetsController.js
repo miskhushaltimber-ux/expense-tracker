@@ -5,7 +5,7 @@
 import { listWageEntriesByUser, listPaymentsByUser, listContractorsByUser } from "../models/labourStore.js";
 import { isGoogleSheetsConfigured, exportWorkLogToSheet, exportPaymentsToSheet, readSheetValues } from "../utils/googleSheets.js";
 import { parseWorkLogValuesToPreview, parsePaymentValuesToPreview } from "../utils/labourImportParser.js";
-import { buildWorkLogWorkbook, buildPaymentsWorkbook, labourFileName } from "../utils/spreadsheetFile.js";
+import { buildWorkLogWorkbook, buildPaymentsWorkbook, buildCombinedLabourWorkbook, labourFileName } from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendLabourSheetEmail } from "../utils/mailer.js";
 
 export const getLabourSheetsStatus = (req, res) => {
@@ -14,7 +14,7 @@ export const getLabourSheetsStatus = (req, res) => {
 
 const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 
-const resolveType = (value) => (value === "payments" ? "payments" : "worklog");
+const resolveType = (value) => (value === "payments" ? "payments" : value === "combined" ? "combined" : "worklog");
 
 export const exportLabourToSheet = async (req, res) => {
   const { sheetUrl, type: rawType } = req.body;
@@ -57,13 +57,13 @@ export const emailLabourSheet = async (req, res) => {
     if (type === "payments") {
       const payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
       if (payments.length === 0) return res.status(400).json({ message: "There are no payments to send yet" });
-      buffer = buildPaymentsWorkbook(payments, contractorsById);
+      buffer = await buildPaymentsWorkbook(payments, contractorsById);
       count = payments.length;
       total = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
     } else {
       const wageEntries = await listWageEntriesByUser(req.user.companyId);
       if (wageEntries.length === 0) return res.status(400).json({ message: "There are no work log entries to send yet" });
-      buffer = buildWorkLogWorkbook(wageEntries, contractorsById);
+      buffer = await buildWorkLogWorkbook(wageEntries, contractorsById);
       count = wageEntries.length;
       total = wageEntries.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
     }
@@ -82,6 +82,41 @@ export const emailLabourSheet = async (req, res) => {
   } catch (error) {
     console.error("Error emailing the labour sheet:", error.message);
     res.status(400).json({ message: error.message || "Couldn't send that email" });
+  }
+};
+
+// Direct file download of the same styled workbook emailLabourSheet builds —
+// 23 Sep, per Rishi (see sheetsController.js's downloadExpenseSheet for the
+// full reasoning). type: "worklog" | "payments" | "combined" (both ledgers
+// as two tabs in one file — the Excel equivalent of "Download Combined CSV").
+export const downloadLabourSheet = async (req, res) => {
+  const type = resolveType(req.query.type);
+
+  try {
+    const contractors = await listContractorsByUser(req.user.companyId);
+    const contractorsById = new Map(contractors.map((c) => [c._id, c]));
+
+    let buffer;
+    if (type === "combined") {
+      const [wageEntries, payments] = await Promise.all([
+        listWageEntriesByUser(req.user.companyId),
+        listPaymentsByUser(req.user.companyId),
+      ]);
+      buffer = await buildCombinedLabourWorkbook(wageEntries, payments, contractorsById);
+    } else if (type === "payments") {
+      const payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
+      buffer = await buildPaymentsWorkbook(payments, contractorsById);
+    } else {
+      const wageEntries = await listWageEntriesByUser(req.user.companyId);
+      buffer = await buildWorkLogWorkbook(wageEntries, contractorsById);
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${labourFileName(type)}"`);
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error("Error building the labour sheet download:", error.message);
+    res.status(400).json({ message: error.message || "Couldn't build that file" });
   }
 };
 

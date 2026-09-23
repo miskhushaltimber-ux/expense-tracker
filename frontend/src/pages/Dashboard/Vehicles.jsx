@@ -4,7 +4,7 @@ import { fetchVehicles } from "/src/api/vehicles";
 import { fetchExpenses, addExpense, updateExpense, deleteExpense, bulkAddExpenses, bulkDeleteExpenses } from "/src/api/expenses";
 import { fetchMasterCatalog } from "/src/api/masters";
 import { previewImportSheet } from "/src/api/imports";
-import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
+import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet, downloadExpenseSheetXlsx } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { FILE_PREFIX } from "/src/constants/brand";
@@ -628,6 +628,24 @@ const Vehicles = () => {
     );
   };
 
+  // 23 Sep, per Rishi: needs a real formatted .xlsx to download, not just CSV —
+  // same reasoning as Expenses.jsx's handleDownloadXlsx.
+  const [downloadingVehicleXlsx, setDownloadingVehicleXlsx] = useState(false);
+  const handleDownloadVehicleXlsx = async () => {
+    if (vehicleExpenseRows.length === 0) {
+      notifyError("No vehicle expenses to export yet");
+      return;
+    }
+    try {
+      setDownloadingVehicleXlsx(true);
+      await downloadExpenseSheetXlsx("vehicles");
+    } catch (err) {
+      notifyError(err.message);
+    } finally {
+      setDownloadingVehicleXlsx(false);
+    }
+  };
+
   // Masters actually present among logged vehicle expenses — keeps the filter
   // dropdown relevant instead of showing every preset category.
   const presentExpenseMasters = useMemo(() => {
@@ -1219,6 +1237,14 @@ const Vehicles = () => {
                 title="Download as a .csv file (opens in Excel or Google Sheets)"
               >
                 <FiDownload size={17} className="mr-2" /> Download CSV
+              </button>
+              <button
+                onClick={handleDownloadVehicleXlsx}
+                disabled={downloadingVehicleXlsx}
+                className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium disabled:opacity-60"
+                title="Download a formatted .xlsx report — ready to print or send"
+              >
+                <FiDownload size={17} className="mr-2" /> {downloadingVehicleXlsx ? "Preparing..." : "Download Excel"}
               </button>
               <button
                 onClick={() => setShowVehicleExportModal(true)}

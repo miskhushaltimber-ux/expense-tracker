@@ -10,7 +10,7 @@ import {
 import { bulkAddPayments } from "/src/api/labour";
 import { fetchMasterCatalog } from "/src/api/masters";
 import { previewImportSheet } from "/src/api/imports";
-import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
+import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet, downloadExpenseSheetXlsx } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { FILE_PREFIX } from "/src/constants/brand";
@@ -600,6 +600,24 @@ const Expenses = () => {
     );
   };
 
+  // 23 Sep, per Rishi: the downloaded sheet needs to look presentable enough
+  // to hand to someone else — a real formatted .xlsx (headers, borders, a
+  // total row), not just a raw .csv. Same file the "Email it" option sends.
+  const [downloadingXlsx, setDownloadingXlsx] = useState(false);
+  const handleDownloadXlsx = async () => {
+    if (rows.length === 0) {
+      notifyError("No expenses to export yet");
+      return;
+    }
+    try {
+      setDownloadingXlsx(true);
+      await downloadExpenseSheetXlsx();
+    } catch (err) {
+      notifyError(err.message);
+    } finally {
+      setDownloadingXlsx(false);
+    }
+  };
 
   // --- Selecting rows for bulk delete -------------------------------------
   // Selection is by row id, so it survives sorting, grouping and re-rendering.
@@ -910,6 +928,14 @@ const Expenses = () => {
               title="Download as a .csv file (opens in Excel or Google Sheets)"
             >
               <FiDownload size={17} className="mr-2" /> Download CSV
+            </button>
+            <button
+              onClick={handleDownloadXlsx}
+              disabled={downloadingXlsx}
+              className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium disabled:opacity-60"
+              title="Download a formatted .xlsx report — ready to print or send"
+            >
+              <FiDownload size={17} className="mr-2" /> {downloadingXlsx ? "Preparing..." : "Download Excel"}
             </button>
             <button
               onClick={() => setShowExportModal(true)}
