@@ -52,7 +52,16 @@ const HEADERS = {
   // customFields (21 Sep, custom-columns feature) holds this row's values
   // for whatever extra columns have been added to this ledger — see
   // utils/customFields.js.
-  wageEntries: ["id", "userId", "contractorId", "dateLabel", "cft", "rate", "createdAt", "updatedAt", "customFields"],
+  //
+  // millId (23 Sep, per Rishi: a multi-mill contractor like Jamir — Mill-11/
+  // 12/13 — produces a SEPARATE CFT output per mill on the same job, e.g.
+  // 1500/1700/1400 CFT. Before this field existed there was nowhere to
+  // record which mill one entry's CFT came from, so the only option was to
+  // add up all three mills into one lumped entry — losing exactly which mill
+  // produced what. Optional and blank for any contractor with only one mill
+  // (or none assigned yet), so nothing about single-mill contractors or
+  // already-saved rows changes.
+  wageEntries: ["id", "userId", "contractorId", "millId", "dateLabel", "cft", "rate", "createdAt", "updatedAt", "customFields"],
   // label is free text too ("CASH/ADV", "S&E", "RTGS", ...) rather than a
   // fixed set — the paper sheet uses several abbreviations sir didn't
   // define, and locking them to an enum risks guessing his terms wrong.
@@ -134,6 +143,7 @@ const toWageEntry = (row) => {
     _id: row.id,
     id: row.id,
     contractorId: row.contractorId,
+    millId: row.millId || "",
     dateLabel: row.dateLabel || "",
     cft,
     rate,

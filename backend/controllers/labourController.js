@@ -199,7 +199,9 @@ const laborHandlers = makePersonHandlers({
 // owner-only, not add/update/delete).
 const wageEntryHandlers = makeSimpleHandlers({
   listByUser: listWageEntriesByUser, create: createWageEntry, updateById: updateWageEntryById, deleteById: deleteWageEntryById,
-  fields: ["contractorId", "dateLabel", "cft", "rate", "customFields"], required: ["contractorId", "dateLabel"], label: "Wage entry",
+  // millId (23 Sep) — optional, which mill this specific CFT batch belongs
+  // to, for a contractor covering more than one.
+  fields: ["contractorId", "millId", "dateLabel", "cft", "rate", "customFields"], required: ["contractorId", "dateLabel"], label: "Wage entry",
   labelFor: (e) => `${e.dateLabel || ""} — ${e.cft || 0} CFT`.trim(),
 });
 const paymentHandlers = makeSimpleHandlers({

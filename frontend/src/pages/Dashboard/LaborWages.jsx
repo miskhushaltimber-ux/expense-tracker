@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FiTrash2, FiSearch, FiFilter, FiXCircle, FiUploadCloud, FiDownload, FiGrid } from "react-icons/fi";
+import { FiTrash2, FiSearch, FiFilter, FiXCircle, FiUploadCloud, FiDownload, FiGrid, FiFileText, FiCalendar } from "react-icons/fi";
 import {
   fetchMills,
   fetchContractors,
@@ -94,9 +94,10 @@ const combineDateRange = (from, to) => {
 // ledger, existing rows included, which is what got slower and slower as a
 // contractor's history grew. Typing now only re-renders this one small row;
 // LedgerSheet's existing-row list is completely untouched by it.
-const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete, setRows }) => {
+const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete, setRows, millPicker }) => {
   const emptyDraft = () => ({
     contractorId: "",
+    ...(millPicker ? { millId: "" } : {}),
     ...(isRange ? { dateFrom: "", dateTo: "" } : { date: "" }),
     ...Object.fromEntries(fields.map((f) => [f.key, ""])),
     customFields: {},
@@ -112,13 +113,27 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
     setDraft((d) => ({ ...d, customFields: { ...d.customFields, [colDef.key]: value } }));
   };
 
+  // Which mills the currently-picked contractor covers (23 Sep) — drives
+  // whether the Mill field below renders as a required picker (>1 mill), is
+  // silently auto-filled (exactly 1 mill, nothing to disambiguate), or stays
+  // empty (no mill assigned yet on Manage Data — same as before this field
+  // existed).
+  const contractorMills = millPicker ? contractorOptions.find((o) => o.value === draft.contractorId)?.millList || [] : [];
+
   const FIELD_ORDER = isRange
-    ? ["dateFrom", "dateTo", "contractorId", ...fields.map((f) => f.key)]
-    : ["date", "contractorId", ...fields.map((f) => f.key)];
+    ? ["dateFrom", "dateTo", "contractorId", ...(millPicker ? ["millId"] : []), ...fields.map((f) => f.key)]
+    : ["date", "contractorId", ...(millPicker ? ["millId"] : []), ...fields.map((f) => f.key)];
 
   const commit = async () => {
     const dateValue = isRange ? combineDateRange(draft.dateFrom, draft.dateTo) : draft.date.trim();
     if (!dateValue || !draft.contractorId) return;
+    // A multi-mill contractor MUST pick which mill this batch belongs to —
+    // that's the whole point (23 Sep, per Rishi: lumping Jamir's three
+    // mills' CFT into one entry loses which mill produced what). A
+    // single-mill (or not-yet-assigned) contractor has nothing to pick, so
+    // it's auto-filled instead of forcing a pointless extra click.
+    if (millPicker && contractorMills.length > 1 && !draft.millId) return;
+    const resolvedMillId = millPicker ? draft.millId || (contractorMills.length === 1 ? contractorMills[0]._id : "") : undefined;
 
     // Optimistic insert (22 Sep, per Rishi: hitting Enter used to visibly
     // freeze for 1-2s before the row appeared — because LaborWages used to
@@ -127,11 +142,12 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
     // real id) quietly swaps in once the server responds, and rolls back —
     // draft restored, nothing lost — if the save actually fails.
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const submittedDraft = draft;
+    const submittedDraft = millPicker ? { ...draft, millId: resolvedMillId } : draft;
     const tempAmount = computeAmount ? computeAmount(submittedDraft) : Number(submittedDraft.amount || 0);
     const tempRow = {
       _id: tempId,
       contractorId: submittedDraft.contractorId,
+      ...(millPicker ? { millId: submittedDraft.millId } : {}),
       date: dateValue,
       dateLabel: dateValue,
       ...Object.fromEntries(fields.map((f) => [f.key, submittedDraft[f.key]])),
@@ -216,7 +232,7 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
         <select
           ref={setFieldRef("contractorId")}
           value={draft.contractorId}
-          onChange={(e) => setDraft((d) => ({ ...d, contractorId: e.target.value }))}
+          onChange={(e) => setDraft((d) => ({ ...d, contractorId: e.target.value, ...(millPicker ? { millId: "" } : {}) }))}
           onKeyDown={(e) => handleKeyDown(e, "contractorId")}
           className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
         >
@@ -226,6 +242,26 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
           ))}
         </select>
       </td>
+      {millPicker && (
+        <td className="px-3 py-2">
+          {contractorMills.length > 1 ? (
+            <select
+              ref={setFieldRef("millId")}
+              value={draft.millId}
+              onChange={(e) => setDraft((d) => ({ ...d, millId: e.target.value }))}
+              onKeyDown={(e) => handleKeyDown(e, "millId")}
+              className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+            >
+              <option value="">Which mill?</option>
+              {contractorMills.map((m) => (
+                <option key={m._id} value={m._id}>{m.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-gray-400 text-xs">{contractorMills[0]?.name || "—"}</span>
+          )}
+        </td>
+      )}
       <td className="px-3 py-2 text-gray-400">
         {contractorOptions.find((o) => o.value === draft.contractorId)?.master || "—"}
       </td>
@@ -274,8 +310,27 @@ const LedgerSheet = ({
   search,
   allowedContractorIds, // Set of contractorId, or null/undefined for "no filter"
   sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
+  millPicker, // true only for Work Log (23 Sep) — shows a per-entry Mill column/picker
+  filterMillId, // optional — narrows rows to just this one mill's entries (Work Log only)
 }) => {
   const isRange = dateMode === "range";
+
+  // A row's mill, resolved the same way everywhere it's needed (display,
+  // filtering): trust the row's own millId if it has one; otherwise, if the
+  // contractor only covers one mill, there was never any ambiguity to begin
+  // with, so fall back to that — keeps rows saved before this field existed
+  // showing correctly instead of going blank.
+  const resolveMillId = (row) => {
+    if (row.millId) return row.millId;
+    const millList = contractorOptions.find((o) => o.value === row.contractorId)?.millList || [];
+    return millList.length === 1 ? millList[0]._id : null;
+  };
+  const resolveMillName = (row) => {
+    const id = resolveMillId(row);
+    if (!id) return "—";
+    const millList = contractorOptions.find((o) => o.value === row.contractorId)?.millList || [];
+    return millList.find((m) => m._id === id)?.name || "—";
+  };
 
   // Custom columns (21 Sep) — Work Log and Payments keep independent column
   // sets even though they share this component, since they're genuinely
@@ -289,6 +344,7 @@ const LedgerSheet = ({
 
   const filtered = rows.filter((r) => {
     if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
+    if (filterMillId && resolveMillId(r) !== filterMillId) return false;
     if (!search) return true;
     const c = contractorOptions.find((o) => o.value === r.contractorId);
     const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
@@ -419,6 +475,7 @@ const LedgerSheet = ({
             <th className="px-3 py-2 font-medium">{dateLabel}</th>
           )}
           <th className="px-3 py-2 font-medium">Contractor</th>
+          {millPicker && <th className="px-3 py-2 font-medium">Mill</th>}
           <th className="px-3 py-2 font-medium">Master</th>
           {fields.map((f) => (
             <th key={f.key} className="px-3 py-2 font-medium">{f.label}</th>
@@ -441,15 +498,16 @@ const LedgerSheet = ({
           onAdd={onAdd}
           onBulkDelete={onBulkDelete}
           setRows={setRows}
+          millPicker={millPicker}
         />
 
         {filtered.length === 0 && (
           <tr>
             <td
-              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 3 + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
+              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 3 + (millPicker ? 1 : 0) + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
               className="px-3 py-2 text-gray-400 italic"
             >
-              {rows.length === 0 ? "Nothing logged yet." : "No rows match your search."}
+              {rows.length === 0 ? "Nothing logged yet." : "No rows match your search/filters."}
             </td>
           </tr>
         )}
@@ -482,6 +540,7 @@ const LedgerSheet = ({
               )}
               <td className="px-3 py-2" colSpan={dateCols}>{row.date || row.dateLabel}</td>
               <td className="px-3 py-2">{c?.label || "—"}</td>
+              {millPicker && <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{resolveMillName(row)}</td>}
               <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c?.master || "—"}</td>
               {fields.map((f) => (
                 <td key={f.key} className="px-3 py-2">{f.format ? f.format(row[f.key]) : row[f.key]}</td>
@@ -535,6 +594,74 @@ const contractorReport = (contractor, wageEntries, payments) => {
 // advances out without adding another input to the Payments sheet.
 const isAdvancePayment = (payment) => /\badv/i.test(payment.label || "");
 
+// Weekly/Monthly/Yearly report view (23 Sep, per Rishi: "give option to see
+// report on weekly basis monthly bases and yearly basis"). Payments carry a
+// real <input type="date"> value, so they filter cleanly. Work Log only
+// carries dateLabel — a formatted "DD-MM-YYYY" or "DD-MM-YYYY TO DD-MM-YYYY"
+// string (see combineDateRange above) — but that string is always built from
+// real date pickers under the hood, so the first date in it can be parsed
+// back out for period filtering without needing a backend change.
+const PERIOD_OPTIONS = [
+  { key: "all", label: "All Time" },
+  { key: "week", label: "This Week" },
+  { key: "month", label: "This Month" },
+  { key: "year", label: "This Year" },
+];
+const parseDateLabel = (label) => {
+  const first = String(label || "").split(" TO ")[0].trim();
+  const [d, m, y] = first.split("-");
+  if (!d || !m || !y) return null;
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return isNaN(dt.getTime()) ? null : dt;
+};
+const periodStart = (periodKey) => {
+  const now = new Date();
+  if (periodKey === "week") {
+    const dt = new Date(now);
+    dt.setHours(0, 0, 0, 0);
+    const day = dt.getDay(); // 0=Sun..6=Sat, week starts Monday
+    dt.setDate(dt.getDate() - (day === 0 ? 6 : day - 1));
+    return dt;
+  }
+  if (periodKey === "month") return new Date(now.getFullYear(), now.getMonth(), 1);
+  if (periodKey === "year") return new Date(now.getFullYear(), 0, 1);
+  return null; // "all"
+};
+const inPeriod = (date, periodKey) => {
+  if (periodKey === "all") return true;
+  const start = periodStart(periodKey);
+  return !!date && date >= start;
+};
+const formatShortDate = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso || "—" : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" });
+};
+
+// Per-contractor numbers scoped to the selected period — Earned/Paid/Advance
+// only count activity that falls inside the chosen window, and
+// `recentPayments` is the bill-style Date + Amount list shown in the
+// report's rightmost column (23 Sep, per Rishi: "on the right side you will
+// report the date and payments all together which looks like a bill" — sir's
+// paper ledger always shows a payment next to the date it was made on, so
+// the report should too, not bury dates out of view). Balance is
+// deliberately NOT computed here — it's real money owed and has to stay the
+// true running total regardless of which period is being viewed; see
+// contractorReport above for that.
+const periodStats = (contractor, wageEntries, payments, periodKey) => {
+  const earned = wageEntries
+    .filter((w) => w.contractorId === contractor._id && inPeriod(parseDateLabel(w.dateLabel), periodKey))
+    .reduce((sum, w) => sum + Number(w.amount || 0), 0);
+
+  const periodPayments = payments
+    .filter((p) => p.contractorId === contractor._id && inPeriod(p.date ? new Date(p.date) : null, periodKey))
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const paid = periodPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const advance = periodPayments.filter(isAdvancePayment).reduce((s, p) => s + Number(p.amount || 0), 0);
+
+  return { earned, paid, advance, recentPayments: periodPayments };
+};
+
 // Report-tab payment-status colour rule (23 Sep, per Rishi: "give colours...
 // green if we payed fully yellow if we owe them red if we delayed the
 // payment etc make rules according to you man"). Rule, spelled out so it's
@@ -581,6 +708,8 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   const [selected, setSelected] = useState("");
   const [search, setSearch] = useState("");
   const [filterMaster, setFilterMaster] = useState("");
+  const [period, setPeriod] = useState("all");
+  const periodLabel = PERIOD_OPTIONS.find((p) => p.key === period)?.label || "All Time";
 
   const inScope = allowedContractorIds ? contractors.filter((c) => allowedContractorIds.has(c._id)) : contractors;
   const optionsInScope = allowedContractorIds
@@ -600,24 +729,27 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   });
 
   // One row per contractor, every number pre-computed once here so both the
-  // table body and the totals footer read from the same values.
+  // table body and the totals footer read from the same values. `report`
+  // (all-time) drives the real running Balance; `stats` (period-scoped)
+  // drives Earned/Paid/Advance and the Recent Payments column, so switching
+  // the period above never makes the Balance column lie about what's
+  // actually owed.
   const rows = useMemo(() => {
     return shownContractors.map((c) => {
       const report = contractorReport(c, wageEntries, payments);
-      const contractorPayments = payments.filter((p) => p.contractorId === c._id);
-      const advancePaid = contractorPayments.filter(isAdvancePayment).reduce((s, p) => s + Number(p.amount || 0), 0);
+      const stats = periodStats(c, wageEntries, payments, period);
       const status = paymentStatus(c, wageEntries, payments, report.balance);
-      return { contractor: c, report, advancePaid, status };
+      return { contractor: c, report, stats, status };
     });
-  }, [shownContractors, wageEntries, payments]);
+  }, [shownContractors, wageEntries, payments, period]);
 
   const totals = useMemo(
     () =>
       rows.reduce(
         (acc, r) => {
-          acc.earned += r.report.totalEarned;
-          acc.paid += r.report.totalPaid;
-          acc.advance += r.advancePaid;
+          acc.earned += r.stats.earned;
+          acc.paid += r.stats.paid;
+          acc.advance += r.stats.advance;
           acc.balance += r.report.balance;
           return acc;
         },
@@ -627,6 +759,10 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   );
 
   const activeFilterCount = (filterMaster ? 1 : 0) + (selected ? 1 : 0);
+  const generatedAt = useMemo(
+    () => new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }),
+    []
+  );
 
   return (
     <div className="space-y-3">
@@ -666,6 +802,18 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             ))}
           </select>
         </div>
+        <div>
+          <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Report period</label>
+          <select
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 font-medium focus:outline-none focus:ring-2 focus:ring-red-400"
+          >
+            {PERIOD_OPTIONS.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+        </div>
         {activeFilterCount > 0 && (
           <button
             onClick={() => {
@@ -678,11 +826,6 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             Clear
           </button>
         )}
-        <div className="flex items-center gap-3 text-xs text-gray-400 pb-2 ml-auto">
-          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-400 inline-block" /> Paid up</span>
-          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" /> Pending</span>
-          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400 inline-block" /> Delayed (14+ days)</span>
-        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -690,49 +833,93 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
           {inScope.length === 0 ? "No contractors yet." : "No contractors match your search/filters."}
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
-                <th className="px-3 py-2 font-medium">Contractor</th>
-                <th className="px-3 py-2 font-medium">Master</th>
-                <th className="px-3 py-2 font-medium">Earned</th>
-                <th className="px-3 py-2 font-medium">Paid</th>
-                <th className="px-3 py-2 font-medium">Advance</th>
-                <th className="px-3 py-2 font-medium">Balance</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ contractor: c, report, advancePaid, status }) => (
-                <tr key={c._id} className={`border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 ${REPORT_ROW_TINT[status.key]}`}>
-                  <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-100">{c.name}</td>
-                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c.contractorType || "—"}</td>
-                  <td className="px-3 py-2">{money(report.totalEarned)}</td>
-                  <td className="px-3 py-2">{money(report.totalPaid)}</td>
-                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{advancePaid > 0 ? money(advancePaid) : "—"}</td>
-                  <td className="px-3 py-2 font-medium">
-                    {report.balance < 0 ? `${money(-report.balance)} owed back` : money(report.balance)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${REPORT_BADGE[status.key]}`}>{status.label}</span>
-                  </td>
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-3.5 border-b border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Contractor Report — {periodLabel}</h2>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                Earned, Paid &amp; Advance reflect {periodLabel === "All Time" ? "all-time" : periodLabel.toLowerCase()} activity — Balance is always the running total as of today.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
+              <FiCalendar size={12} />
+              Generated {generatedAt}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Contractor</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Master</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Earned</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Paid</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Advance</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Balance</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">
+                    <span className="flex items-center gap-1"><FiFileText size={12} /> Recent Payments</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 divide-x divide-gray-200 dark:divide-gray-700 border-gray-300 dark:border-gray-600 font-semibold text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
-                <td className="px-3 py-2" colSpan={2}>
-                  Total ({rows.length} {rows.length === 1 ? "contractor" : "contractors"})
-                </td>
-                <td className="px-3 py-2">{money(totals.earned)}</td>
-                <td className="px-3 py-2">{money(totals.paid)}</td>
-                <td className="px-3 py-2">{totals.advance > 0 ? money(totals.advance) : "—"}</td>
-                <td className="px-3 py-2">{totals.balance < 0 ? `${money(-totals.balance)} owed back` : money(totals.balance)}</td>
-                <td className="px-3 py-2"></td>
-              </tr>
-            </tfoot>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map(({ contractor: c, report, stats, status }) => (
+                  <tr
+                    key={c._id}
+                    className={`border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 transition-colors hover:brightness-95 dark:hover:brightness-110 ${REPORT_ROW_TINT[status.key]}`}
+                  >
+                    <td className="px-4 py-3 font-medium text-gray-800 dark:text-gray-100 align-top">{c.name}</td>
+                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{c.contractorType || "—"}</td>
+                    <td className="px-4 py-3 align-top">{money(stats.earned)}</td>
+                    <td className="px-4 py-3 align-top">{money(stats.paid)}</td>
+                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{stats.advance > 0 ? money(stats.advance) : "—"}</td>
+                    <td className="px-4 py-3 font-semibold align-top">
+                      {report.balance < 0 ? `${money(-report.balance)} owed back` : money(report.balance)}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <span className={`inline-block text-xs font-medium px-2.5 py-1 rounded-full ${REPORT_BADGE[status.key]}`}>{status.label}</span>
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      {stats.recentPayments.length === 0 ? (
+                        <span className="text-xs text-gray-400 italic">No payments{period !== "all" ? " this period" : " yet"}</span>
+                      ) : (
+                        <div className="min-w-[130px] divide-y divide-gray-100 dark:divide-gray-700">
+                          {stats.recentPayments.slice(0, 3).map((p) => (
+                            <div key={p._id} className="flex items-center justify-between gap-3 py-0.5 text-xs first:pt-0">
+                              <span className="text-gray-500 dark:text-gray-400">{formatShortDate(p.date)}</span>
+                              <span className="font-medium text-gray-700 dark:text-gray-200">{money(p.amount)}</span>
+                            </div>
+                          ))}
+                          {stats.recentPayments.length > 3 && (
+                            <div className="text-[11px] text-gray-400 pt-0.5">+{stats.recentPayments.length - 3} more</div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 divide-x divide-gray-200 dark:divide-gray-700 border-gray-300 dark:border-gray-600 font-semibold text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
+                  <td className="px-4 py-3" colSpan={2}>
+                    Total ({rows.length} {rows.length === 1 ? "contractor" : "contractors"})
+                  </td>
+                  <td className="px-4 py-3">{money(totals.earned)}</td>
+                  <td className="px-4 py-3">{money(totals.paid)}</td>
+                  <td className="px-4 py-3">{totals.advance > 0 ? money(totals.advance) : "—"}</td>
+                  <td className="px-4 py-3">{totals.balance < 0 ? `${money(-totals.balance)} owed back` : money(totals.balance)}</td>
+                  <td className="px-4 py-3" colSpan={2}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400 px-4 sm:px-5 py-3 border-t border-gray-100 dark:border-gray-700">
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-400 inline-block" /> Paid up</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" /> Pending</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400 inline-block" /> Delayed (14+ days)</span>
+          </div>
         </div>
       )}
     </div>
@@ -777,6 +964,14 @@ const LaborWages = () => {
 
   const contractorName = (id) => contractors.find((c) => c._id === id)?.name || "";
   const contractorMaster = (id) => contractors.find((c) => c._id === id)?.contractorType || "";
+  // Resolves the same way LedgerSheet's own resolveMillName does (23 Sep) —
+  // trust the entry's own millId, fall back to the contractor's sole mill
+  // when there's no ambiguity, otherwise "—".
+  const wageEntryMillName = (w) => {
+    const millList = contractorOptions.find((o) => o.value === w.contractorId)?.millList || [];
+    const id = w.millId || (millList.length === 1 ? millList[0]._id : null);
+    return millList.find((m) => m._id === id)?.name || "—";
+  };
 
   const handleExportWorkLogCsv = () => {
     if (wageEntries.length === 0) {
@@ -787,6 +982,7 @@ const LaborWages = () => {
       `${FILE_PREFIX}-work-log-${todayStr()}.csv`,
       [
         { key: "contractor", label: "Contractor" },
+        { key: "mill", label: "Mill" },
         { key: "master", label: "Master" },
         { key: "date", label: "Date" },
         { key: "cft", label: "CFT" },
@@ -795,6 +991,7 @@ const LaborWages = () => {
       ],
       wageEntries.map((w) => ({
         contractor: contractorName(w.contractorId),
+        mill: wageEntryMillName(w),
         master: contractorMaster(w.contractorId),
         date: w.dateLabel,
         cft: w.cft,
@@ -849,7 +1046,7 @@ const LaborWages = () => {
         contractor: contractorName(w.contractorId),
         master: contractorMaster(w.contractorId),
         date: w.dateLabel,
-        details: `${w.cft || 0} CFT × ₹${w.rate || 0}`,
+        details: `${wageEntryMillName(w)} — ${w.cft || 0} CFT × ₹${w.rate || 0}`,
         amount: w.amount,
       })),
       ...payments.map((p) => ({
@@ -930,7 +1127,12 @@ const LaborWages = () => {
       // master (21 Sep, per Rishi: "add one master column in labour wages
       // sheet in workflow and payment sub split pages both") — carried along
       // here so LedgerSheet can show it without a separate lookup.
-      return { value: c._id, label: millLabel ? `${c.name} (${millLabel})` : c.name, master: c.contractorType || "" };
+      // millList (23 Sep, per Rishi: a multi-mill contractor's CFT output is
+      // different per mill and lumping it into one entry loses which mill
+      // produced what) — the real Mill objects (not just the label string
+      // above), so the Work Log draft row can offer them as a per-entry
+      // picker and existing rows can resolve their own millId back to a name.
+      return { value: c._id, label: millLabel ? `${c.name} (${millLabel})` : c.name, master: c.contractorType || "", millList };
     });
   }, [contractors, mills]);
 
@@ -1130,6 +1332,7 @@ const LaborWages = () => {
                 // just needs the saved entity back to replace its temp row.
                 addWageEntry({
                   contractorId: draft.contractorId,
+                  millId: draft.millId, // 23 Sep — which mill this CFT batch belongs to, for a multi-mill contractor
                   dateLabel: draft.date,
                   cft: draft.cft,
                   rate: draft.rate,
@@ -1141,6 +1344,8 @@ const LaborWages = () => {
               search={search}
               allowedContractorIds={allowedContractorIds}
               sheetKey="wageEntries"
+              millPicker
+              filterMillId={filterMill}
             />
           </div>
         </div>
