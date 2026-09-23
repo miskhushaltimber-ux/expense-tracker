@@ -1,0 +1,18 @@
+# Daily data backup (23 Sep). Once a day, calls the backend's scheduled-backup
+# endpoint, which emails every company owner a full JSON backup of their data.
+# Free: GitHub Actions cron + the existing Render/Brevo setup. The retries
+# cover Render's free tier waking up from sleep (can take ~1 minute).
+name: Daily backup
+on:
+  schedule:
+    - cron: "30 20 * * *" # 20:30 UTC = 2:00 AM IST
+  workflow_dispatch: {} # lets you run it by hand from the Actions tab
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger backup
+        run: |
+          curl --fail-with-body -sS -X POST "${{ secrets.BACKUP_URL }}" \
+            -H "x-backup-secret: ${{ secrets.BACKUP_CRON_SECRET }}" \
+            --retry 4 --retry-delay 30 --retry-all-errors --max-time 240

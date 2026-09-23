@@ -526,64 +526,63 @@ const contractorReport = (contractor, wageEntries, payments) => {
   return { totalEarned, totalPaid, openingBalance, balance };
 };
 
-// Redesigned 22 Sep, per Rishi's notebook: "looks bad as hell" — a colored
-// left accent bar (green/amber/red, matching the settle status) replaces the
-// plain status line as the card's primary signal, a Master chip sits next to
-// the mill label when the contractor has one, and the numbers are laid out
-// as small stat blocks instead of a loose 3-column grid.
-const ReportCard = ({ contractor, millLabel, report }) => {
-  const { totalEarned, totalPaid, openingBalance, balance } = report;
-  const status =
-    balance > 0
-      ? { text: `Pending — you owe ${money(balance)}`, cls: "text-amber-700 dark:text-amber-400", bar: "border-l-amber-400", badge: "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300" }
-      : balance < 0
-      ? { text: `${contractor.name} owes back ${money(-balance)}`, cls: "text-red-700 dark:text-red-400", bar: "border-l-red-400", badge: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300" }
-      : { text: "Settled", cls: "text-green-700 dark:text-green-400", bar: "border-l-green-400", badge: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300" };
+// A payment counts as an ADVANCE if its Label mentions it (23 Sep, per
+// Rishi: "my boss pays the contractors in advance too but mainly the
+// payments are done on weekly workflow basis"). Deliberately no new field/
+// checkbox anywhere — Rishi's team already writes things like "CASH/ADV" in
+// the Label column on real entries (see labourStore.js's own comment on that
+// field), so reading that same free text is the simplest way to split
+// advances out without adding another input to the Payments sheet.
+const isAdvancePayment = (payment) => /\badv/i.test(payment.label || "");
 
-  return (
-    <div className={`bg-white dark:bg-gray-800 rounded-lg shadow border-l-4 ${status.bar} p-4 space-y-3`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="font-semibold text-gray-800 dark:text-gray-100 truncate">{contractor.name}</h3>
-          {millLabel && <p className="text-xs text-gray-400 truncate">{millLabel}</p>}
-        </div>
-        {contractor.contractorType && (
-          <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300">
-            {contractor.contractorType}
-          </span>
-        )}
-      </div>
-      <div className="grid grid-cols-3 gap-2 text-sm">
-        <div>
-          <div className="text-gray-400 text-[11px]">Paid</div>
-          <div className="font-medium text-gray-800 dark:text-gray-100">{money(totalPaid)}</div>
-        </div>
-        <div>
-          <div className="text-gray-400 text-[11px]">Earned</div>
-          <div className="font-medium text-gray-800 dark:text-gray-100">{money(totalEarned)}</div>
-        </div>
-        <div>
-          <div className="text-gray-400 text-[11px]">Opening</div>
-          <div className="font-medium text-gray-800 dark:text-gray-100">{money(openingBalance)}</div>
-        </div>
-      </div>
-      <span className={`inline-block text-xs font-medium px-2 py-1 rounded-full ${status.badge}`}>{status.text}</span>
-    </div>
-  );
+// Report-tab payment-status colour rule (23 Sep, per Rishi: "give colours...
+// green if we payed fully yellow if we owe them red if we delayed the
+// payment etc make rules according to you man"). Rule, spelled out so it's
+// easy to retune later: GREEN once the balance is settled (paid >= earned +
+// opening); otherwise YELLOW while there's still a pending balance but the
+// most recent payment was within the last DELAY_THRESHOLD_DAYS (matches
+// "mainly weekly" — two weeks' grace before calling it late); RED once that
+// window has passed with money still owed, or nothing has ever been paid at
+// all despite work being logged.
+const DELAY_THRESHOLD_DAYS = 14;
+const paymentStatus = (contractor, wageEntries, payments, balance) => {
+  if (balance <= 0) return { key: "green", label: "Paid up" };
+  const contractorPayments = payments.filter((p) => p.contractorId === contractor._id && p.date);
+  const lastPaymentMs = contractorPayments.length
+    ? Math.max(...contractorPayments.map((p) => new Date(p.date).getTime()))
+    : null;
+  const daysSincePayment = lastPaymentMs ? (Date.now() - lastPaymentMs) / 86400000 : Infinity;
+  return daysSincePayment > DELAY_THRESHOLD_DAYS
+    ? { key: "red", label: "Delayed" }
+    : { key: "yellow", label: "Pending" };
 };
 
+const REPORT_ROW_TINT = {
+  green: "bg-green-50/60 dark:bg-green-900/20",
+  yellow: "bg-amber-50/60 dark:bg-amber-900/20",
+  red: "bg-red-50/60 dark:bg-red-900/20",
+};
+const REPORT_BADGE = {
+  green: "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300",
+  yellow: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300",
+  red: "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300",
+};
+
+// Redesigned 23 Sep, per Rishi's notebook: "go with this format... looks
+// like sheet too but we cant enter or alter the data we can just see the
+// data" — a read-only spreadsheet-style table (same grid-line/header look as
+// the Work Log and Payments sheets) instead of the earlier card grid,
+// row-tinted by the status rule above, showing only the numbers Rishi
+// actually asked for (earned/paid/advance/balance/status) — "make it simple
+// and report shows the most important data only", so Opening Balance and the
+// per-mill breakdown are left off this table (still visible on Manage Data
+// and the Mill filter respectively) to keep it to what he said matters.
 const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, allowedContractorIds }) => {
   const [selected, setSelected] = useState("");
-  // Search + Master filter (22 Sep, per Rishi's notebook) — a Master filter
-  // is only meaningful now that contractorType (Manage Data's "Master" tag)
-  // exists at all, see the Eighteenth update.
   const [search, setSearch] = useState("");
   const [filterMaster, setFilterMaster] = useState("");
 
   const inScope = allowedContractorIds ? contractors.filter((c) => allowedContractorIds.has(c._id)) : contractors;
-  // The dropdown/filter options themselves should only offer contractors the
-  // page-level Mill/Contractor filter left in scope — otherwise picking a
-  // filtered-out name here would silently ignore that filter.
   const optionsInScope = allowedContractorIds
     ? contractorOptions.filter((o) => allowedContractorIds.has(o.value))
     : contractorOptions;
@@ -593,33 +592,44 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   );
 
   const q = search.trim().toLowerCase();
-  const shown = inScope.filter((c) => {
+  const shownContractors = inScope.filter((c) => {
     if (selected && c._id !== selected) return false;
     if (filterMaster && c.contractorType !== filterMaster) return false;
     if (q && !c.name.toLowerCase().includes(q)) return false;
     return true;
   });
 
-  // A small totals strip across whatever's actually shown — lets Rishi see
-  // "how much pending across these N contractors" without adding every
-  // card's own number in his head.
-  const shownTotals = useMemo(() => {
-    return shown.reduce(
-      (acc, c) => {
-        const r = contractorReport(c, wageEntries, payments);
-        acc.earned += r.totalEarned;
-        acc.paid += r.totalPaid;
-        acc.balance += r.balance;
-        return acc;
-      },
-      { earned: 0, paid: 0, balance: 0 }
-    );
-  }, [shown, wageEntries, payments]);
+  // One row per contractor, every number pre-computed once here so both the
+  // table body and the totals footer read from the same values.
+  const rows = useMemo(() => {
+    return shownContractors.map((c) => {
+      const report = contractorReport(c, wageEntries, payments);
+      const contractorPayments = payments.filter((p) => p.contractorId === c._id);
+      const advancePaid = contractorPayments.filter(isAdvancePayment).reduce((s, p) => s + Number(p.amount || 0), 0);
+      const status = paymentStatus(c, wageEntries, payments, report.balance);
+      return { contractor: c, report, advancePaid, status };
+    });
+  }, [shownContractors, wageEntries, payments]);
+
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (acc, r) => {
+          acc.earned += r.report.totalEarned;
+          acc.paid += r.report.totalPaid;
+          acc.advance += r.advancePaid;
+          acc.balance += r.report.balance;
+          return acc;
+        },
+        { earned: 0, paid: 0, advance: 0, balance: 0 }
+      ),
+    [rows]
+  );
 
   const activeFilterCount = (filterMaster ? 1 : 0) + (selected ? 1 : 0);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
         <div className="relative min-w-[12rem]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
@@ -668,44 +678,63 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             Clear
           </button>
         )}
+        <div className="flex items-center gap-3 text-xs text-gray-400 pb-2 ml-auto">
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-green-400 inline-block" /> Paid up</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" /> Pending</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400 inline-block" /> Delayed (14+ days)</span>
+        </div>
       </div>
 
-      {shown.length > 0 && (
-        <div className="flex flex-wrap gap-4 bg-gray-50 dark:bg-gray-900/40 rounded-lg px-4 py-3 text-sm">
-          <span className="text-gray-500 dark:text-gray-400">
-            {shown.length} {shown.length === 1 ? "contractor" : "contractors"}
-          </span>
-          <span>Earned <span className="font-semibold text-gray-800 dark:text-gray-100">{money(shownTotals.earned)}</span></span>
-          <span>Paid <span className="font-semibold text-gray-800 dark:text-gray-100">{money(shownTotals.paid)}</span></span>
-          <span>
-            {shownTotals.balance < 0 ? "Owed back" : "Pending"}{" "}
-            <span className={`font-semibold ${shownTotals.balance > 0 ? "text-amber-700 dark:text-amber-400" : shownTotals.balance < 0 ? "text-red-700 dark:text-red-400" : "text-green-700 dark:text-green-400"}`}>
-              {money(Math.abs(shownTotals.balance))}
-            </span>
-          </span>
-        </div>
-      )}
-
-      {shown.length === 0 && (
+      {rows.length === 0 ? (
         <div className="text-sm text-gray-400 italic">
           {inScope.length === 0 ? "No contractors yet." : "No contractors match your search/filters."}
         </div>
+      ) : (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
+                <th className="px-3 py-2 font-medium">Contractor</th>
+                <th className="px-3 py-2 font-medium">Master</th>
+                <th className="px-3 py-2 font-medium">Earned</th>
+                <th className="px-3 py-2 font-medium">Paid</th>
+                <th className="px-3 py-2 font-medium">Advance</th>
+                <th className="px-3 py-2 font-medium">Balance</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ contractor: c, report, advancePaid, status }) => (
+                <tr key={c._id} className={`border-b divide-x divide-gray-200 dark:divide-gray-700 border-gray-100 dark:border-gray-800 ${REPORT_ROW_TINT[status.key]}`}>
+                  <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-100">{c.name}</td>
+                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c.contractorType || "—"}</td>
+                  <td className="px-3 py-2">{money(report.totalEarned)}</td>
+                  <td className="px-3 py-2">{money(report.totalPaid)}</td>
+                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{advancePaid > 0 ? money(advancePaid) : "—"}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {report.balance < 0 ? `${money(-report.balance)} owed back` : money(report.balance)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${REPORT_BADGE[status.key]}`}>{status.label}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 divide-x divide-gray-200 dark:divide-gray-700 border-gray-300 dark:border-gray-600 font-semibold text-gray-800 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
+                <td className="px-3 py-2" colSpan={2}>
+                  Total ({rows.length} {rows.length === 1 ? "contractor" : "contractors"})
+                </td>
+                <td className="px-3 py-2">{money(totals.earned)}</td>
+                <td className="px-3 py-2">{money(totals.paid)}</td>
+                <td className="px-3 py-2">{totals.advance > 0 ? money(totals.advance) : "—"}</td>
+                <td className="px-3 py-2">{totals.balance < 0 ? `${money(-totals.balance)} owed back` : money(totals.balance)}</td>
+                <td className="px-3 py-2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {shown.map((c) => {
-          const opt = contractorOptions.find((o) => o.value === c._id);
-          const millLabel = opt?.label?.includes("(") ? opt.label.slice(opt.label.indexOf("(") + 1, -1) : null;
-          return (
-            <ReportCard
-              key={c._id}
-              contractor={c}
-              millLabel={millLabel}
-              report={contractorReport(c, wageEntries, payments)}
-            />
-          );
-        })}
-      </div>
     </div>
   );
 };

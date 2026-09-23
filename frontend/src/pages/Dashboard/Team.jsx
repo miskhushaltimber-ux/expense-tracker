@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock } from "react-icons/fi";
+import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock, FiDatabase } from "react-icons/fi";
+import { downloadBackup } from "../../api/backup";
 import { useAuth } from "../../context/AuthContext";
 import { fetchTeam, createStaff, removeStaff, fetchAuditLog } from "../../api/team";
 
@@ -43,6 +44,17 @@ const Team = () => {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [createdCreds, setCreatedCreds] = useState(null);
+  const [backingUp, setBackingUp] = useState(false);
+  const handleBackup = async () => {
+    setBackingUp(true);
+    try {
+      await downloadBackup();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setBackingUp(false);
+    }
+  };
 
   const loadAll = async () => {
     try {
@@ -110,6 +122,25 @@ const Team = () => {
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
           Everyone who can log in to this account, and a record of who did what — visible only to you.
         </p>
+      </div>
+
+      {/* Backup (23 Sep) — manual download on top of the automatic daily email backup. */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+            <FiDatabase size={15} /> Data backup
+          </h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            A full copy of every record is emailed to you automatically each night. Download one now any time.
+          </p>
+        </div>
+        <button
+          onClick={handleBackup}
+          disabled={backingUp}
+          className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2"
+        >
+          {backingUp ? "Preparing…" : "Download backup"}
+        </button>
       </div>
 
       {error && (

@@ -78,7 +78,7 @@ const sendViaBrevo = async ({ to, subject, html, attachment }) => {
       to: [{ email: to }],
       subject,
       htmlContent: html,
-      ...(attachment ? { attachment: [attachment] } : {}),
+      ...(attachment ? { attachment: [{ name: attachment.name, content: attachment.content }] } : {}),
     }),
   });
 
@@ -111,7 +111,7 @@ const sendViaSmtp = async ({ to, subject, html, attachment }) => {
               {
                 filename: attachment.name,
                 content: Buffer.from(attachment.content, "base64"),
-                contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                contentType: attachment.contentType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
               },
             ],
           }
@@ -203,3 +203,17 @@ export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, t
     attachment: { name: fileName, content: buffer.toString("base64") },
   });
 };
+
+// Daily backup email (23 Sep, backup system) — the JSON snapshot from
+// utils/backup.js as an attachment. Keep these emails: each one is a full
+// restorable copy of the account's data as of that day.
+export const sendBackupEmail = async ({ toEmail, companyName, fileName, json, totalDocs }) =>
+  send({
+    to: toEmail,
+    subject: `Daily data backup — ${companyName || APP_NAME} — ${new Date().toLocaleDateString("en-IN")}`,
+    html: `
+      <p>Attached is today's automatic backup of your ${APP_NAME} data (${totalDocs} records).</p>
+      <p>Keep this email. If data is ever lost, this file can be used to restore it.</p>
+    `,
+    attachment: { name: fileName, content: Buffer.from(json).toString("base64"), contentType: "application/json" },
+  });

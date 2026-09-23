@@ -16,6 +16,7 @@ import labourRoutes from "./routes/labourRoutes.js";
 import labourSheetsRoutes from "./routes/labourSheetsRoutes.js";
 import teamRoutes from "./routes/teamRoutes.js";
 import columnDefRoutes from "./routes/columnDefRoutes.js";
+import backupRoutes from "./routes/backupRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isFirestoreConfigured } from "./utils/firestoreClient.js";
 import { runMigration } from "./scripts/migrateSheetsToFirestore.js";
@@ -92,6 +93,7 @@ app.use("/api/labour", labourRoutes);
 app.use("/api/labour-sheets", labourSheetsRoutes);
 app.use("/api/team", teamRoutes);
 app.use("/api/columns", columnDefRoutes);
+app.use("/api/backup", backupRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
