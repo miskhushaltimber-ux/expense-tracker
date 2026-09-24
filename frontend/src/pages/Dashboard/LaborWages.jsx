@@ -263,11 +263,11 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
             >
               <option value="">Which mill?</option>
               {contractorMills.map((m) => (
-                <option key={m._id} value={m._id}>{m.name}</option>
+                <option key={m._id} value={m._id}>{m.location}</option>
               ))}
             </select>
           ) : (
-            <span className="text-gray-400 text-xs">{contractorMills[0]?.name || "—"}</span>
+            <span className="text-gray-400 text-xs">{contractorMills[0]?.location || "—"}</span>
           )}
         </td>
       )}
@@ -370,7 +370,13 @@ const LedgerSheet = ({
     const id = resolveMillId(row);
     if (!id) return "—";
     const millList = contractorById.get(row.contractorId)?.millList || [];
-    return millList.find((m) => m._id === id)?.name || "—";
+    // 24 Sep, per Rishi ("remove mills from the contractor's name, just show
+    // the location like KTPL 1, KTPL 2") — the Mill's own `name` field is
+    // where he'd been putting work-category words (Repso, Bundle, Core
+    // Loading, ...) that belong on the Contractor's Master field instead, so
+    // showing it here was surfacing that mix-up everywhere a Mill appears.
+    // `location` is the field that actually identifies which mill this is.
+    return millList.find((m) => m._id === id)?.location || "—";
   };
 
   // Custom columns (21 Sep) — Work Log and Payments keep independent column
@@ -1178,7 +1184,8 @@ const LaborWages = () => {
   const wageEntryMillName = (w) => {
     const millList = contractorOptions.find((o) => o.value === w.contractorId)?.millList || [];
     const id = w.millId || (millList.length === 1 ? millList[0]._id : null);
-    return millList.find((m) => m._id === id)?.name || "—";
+    // Same fix as LedgerSheet's resolveMillName above — location, not name.
+    return millList.find((m) => m._id === id)?.location || "—";
   };
 
   const handleExportWorkLogCsv = () => {
@@ -1322,16 +1329,21 @@ const LaborWages = () => {
     loadData();
   }, []);
 
-  // "Ramesh (Mill No-01, KTPL I)" — enough to tell two same-named
-  // contractors at different mills apart without leaving this page. A
-  // contractor covering several mills (22 Sep, multi-mill support — e.g.
-  // Jamir on Mill-11/12/13) lists all of them instead of just one.
+  // "Ramesh (KTPL I)" — enough to tell two same-named contractors at
+  // different mills apart without leaving this page. A contractor covering
+  // several mills (22 Sep, multi-mill support — e.g. Jamir on Mill-11/12/13)
+  // lists all of them instead of just one. 24 Sep, per Rishi ("remove mills
+  // from the contractor's name, just show the location like KTPL 1, KTPL
+  // 2") — this used to also show the Mill's own `name` field, but that's
+  // where he'd been entering work-category words (Repso, Bundle, Core
+  // Loading, ...) rather than a real mill identifier, so it read as noise.
+  // `location` is deduped since two Mill rows can share one location.
   const contractorOptions = useMemo(() => {
     const millsById = new Map(mills.map((m) => [m._id, m]));
     return contractors.map((c) => {
       const millList = (c.millIds || []).map((id) => millsById.get(id)).filter(Boolean);
-      const millLabel =
-        millList.length === 0 ? "" : millList.length === 1 ? `${millList[0].name}, ${millList[0].location}` : millList.map((m) => m.name).join("/");
+      const millLocations = [...new Set(millList.map((m) => m.location).filter(Boolean))];
+      const millLabel = millLocations.join("/");
       // master (21 Sep, per Rishi: "add one master column in labour wages
       // sheet in workflow and payment sub split pages both") — carried along
       // here so LedgerSheet can show it without a separate lookup.
@@ -1407,7 +1419,7 @@ const LaborWages = () => {
             >
               <option value="">All mills</option>
               {mills.map((m) => (
-                <option key={m._id} value={m._id}>{m.name} ({m.location})</option>
+                <option key={m._id} value={m._id}>{m.location}</option>
               ))}
             </select>
           </div>
