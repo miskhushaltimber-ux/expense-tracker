@@ -153,8 +153,10 @@ export const sendPasswordResetEmail = async (toEmail, resetUrl) =>
   });
 
 // scopeLabel defaults to "expense sheet" so Expenses.jsx's existing calls are
-// unchanged; Vehicles.jsx passes "vehicle expense sheet".
-export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, scopeLabel = "expense sheet" }) => {
+// unchanged; Vehicles.jsx passes "vehicle expense sheet". contentType (24
+// Sep, format dropdown) lets the CSV path send "text/csv" instead of the
+// xlsx mimetype sendViaSmtp otherwise defaults attachments to.
+export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, scopeLabel = "expense sheet", contentType }) => {
   const money = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -173,14 +175,15 @@ export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, 
         and choose "Open with Google Sheets".
       </p>
     `,
-    attachment: { name: fileName, content: buffer.toString("base64") },
+    attachment: { name: fileName, content: buffer.toString("base64"), contentType },
   });
 };
 
 // Labor Wages equivalent — Work Log has no meaningful single "total" the way
 // expenses/payments do (it's CFT * rate per row, already summed into
 // `total`), so this shares the same shape but a type-aware subject/label.
-export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, type }) => {
+// contentType — see sendExpenseSheetEmail's comment above.
+export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, type, contentType }) => {
   const label = type === "payments" ? "payments sheet" : type === "combined" ? "work log & payments (combined)" : "work log";
   const money = new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -200,9 +203,28 @@ export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, t
         and choose "Open with Google Sheets".
       </p>
     `,
-    attachment: { name: fileName, content: buffer.toString("base64") },
+    attachment: { name: fileName, content: buffer.toString("base64"), contentType },
   });
 };
+
+// Generic tabular-report email (24 Sep, per Rishi: "add the report to
+// download or share option") — the Report tab's numbers (Earned/Paid/
+// Advance/Balance/Status per contractor) are computed entirely in the
+// frontend, so there's no server-side "total" the way an expense/payment
+// sheet has one (Earned, Paid, Advance and Balance are four different sums,
+// not one) — this skips that line rather than showing a misleading ₹0.
+export const sendReportEmail = async ({ toEmail, fileName, buffer, count, note, title = "Report" }) =>
+  send({
+    to: toEmail,
+    subject: `${title} — ${new Date().toLocaleDateString("en-IN")}`,
+    html: `
+      <p>Here is the ${title.toLowerCase()}.</p>
+      <p><strong>${count}</strong> ${count === 1 ? "row" : "rows"}.</p>
+      ${note ? `<p style="white-space:pre-wrap">${note}</p>` : ""}
+      <p style="color:#666;font-size:13px">The attached file opens in Excel, or in Google Sheets.</p>
+    `,
+    attachment: { name: fileName, content: buffer.toString("base64"), contentType: "text/csv" },
+  });
 
 // Daily backup email (23 Sep, backup system) — the JSON snapshot from
 // utils/backup.js as an attachment. Keep these emails: each one is a full

@@ -9,6 +9,8 @@ import {
 import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
 import { logAction } from "../utils/auditLog.js";
 import { parseCustomFields } from "../utils/customFields.js";
+import { resolveThekedarContractor } from "../utils/importDestinations.js";
+import { createPayment } from "../models/labourStore.js";
 
 // 19 Sep, multi-user accounts: every list/create/update/delete below is now
 // scoped by req.user.companyId (the shared account), not req.user.id (the
@@ -26,6 +28,44 @@ export const addExpense = async (req, res) => {
   }
 
   try {
+    // 24 Sep, per Rishi: "the app itself gets to know what type of payment
+    // it is just by reading the master... we put peeling thekedar and the
+    // app recongnizes it as new master for the labor section" — a Thekedar
+    // Master typed straight into the Expense Sheet is a Labor Wages payment,
+    // not a generic expense; same signal + auto-create-Contractor logic the
+    // "From Google Sheet"/file import already uses (see
+    // utils/importDestinations.js). Skipped when a vehicle is picked — a
+    // vehicle-tagged row is unambiguous already, and litres/odometer would
+    // have nowhere to go on a Payment.
+    if (!vehicleId) {
+      const routed = await resolveThekedarContractor(master, req.user.companyId);
+      if (routed) {
+        const payment = await createPayment({
+          userId: req.user.companyId,
+          contractorId: routed.contractor._id,
+          date: date || new Date().toISOString().split("T")[0],
+          label: expense,
+          amount,
+          customFields: {},
+        });
+        logAction({
+          companyId: req.user.companyId,
+          ...actorFields(req),
+          action: "created",
+          entity: "payment",
+          entityLabel: `${expense} — ₹${amount} (auto-routed from Expense Sheet master "${master}")`,
+        });
+        return res.status(201).json({
+          routedTo: "labour-payment",
+          contractorId: routed.contractor._id,
+          contractorName: routed.contractor.name,
+          contractorCreated: routed.created,
+          master,
+          payment,
+        });
+      }
+    }
+
     const doc = await createExpense({
       userId: req.user.companyId,
       date: date || new Date(),

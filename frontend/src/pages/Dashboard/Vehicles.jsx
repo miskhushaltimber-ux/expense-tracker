@@ -357,6 +357,9 @@ const Vehicles = () => {
   // their own, so the import modal asks which vehicle they belong to.
   const [showVehicleImportModal, setShowVehicleImportModal] = useState(false);
   const [showVehicleExportModal, setShowVehicleExportModal] = useState(false);
+  // Which tab the Share Sheet modal opens into (24 Sep) — "sheet" from the
+  // Download menu's own "Push to Google Sheet" shortcut.
+  const [vehicleExportMode, setVehicleExportMode] = useState("email");
   const [importVehicleId, setImportVehicleId] = useState("");
   const [filterVehicleId, setFilterVehicleId] = useState("");
   const [filterExpenseText, setFilterExpenseText] = useState("");
@@ -599,6 +602,28 @@ const Vehicles = () => {
   // All vehicle-tagged expenses, across every vehicle — this is what the
   // consolidated Vehicle Expense Sheet below shows and edits.
   const vehicleExpenseRows = useMemo(() => expenses.filter((e) => e.vehicleId), [expenses]);
+
+  // Vehicle-relevant Master suggestions (24 Sep, per Rishi: "VEHICLE MASTER
+  // IS BUGGY MAN WHY CANT IT TOOK IT AUTOMATIC AND NOT MIX OTHER MASTERS
+  // FROM THE OTHER TWO SHEETS?") — `masters` is the full shared per-user
+  // catalog (the same one the main Expense Sheet uses), so passed through
+  // as-is it suggests every generic Expense category AND every Labor Wages
+  // "Thekedar" category too. This narrows just the SUGGESTION list shown
+  // here to the curated vehicle categories (VEHICLE_BREAKDOWN_MASTERS) plus
+  // whatever master is already actually used on a vehicle-tagged expense —
+  // "automatic" in that a custom one Rishi types here starts showing up on
+  // its own from then on, without pulling in everything from the other two
+  // sheets. `masterCatalog` (the full thing) is passed through unchanged
+  // everywhere — rename/add/delete via Manage Data still touches the real,
+  // whole catalog, this only narrows what's suggested while typing here.
+  const vehicleMasters = useMemo(() => {
+    const used = new Set(vehicleExpenseRows.map((r) => r.master).filter(Boolean));
+    const relevant = new Set([...VEHICLE_BREAKDOWN_MASTERS, ...used]);
+    const fromCatalog = masters.filter((m) => relevant.has(m));
+    const missing = [...relevant].filter((m) => !fromCatalog.includes(m));
+    return [...fromCatalog, ...missing];
+  }, [masters, vehicleExpenseRows]);
+
   const vehicleExpenseTotal = useMemo(
     () => vehicleExpenseRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0),
     [vehicleExpenseRows]
@@ -947,7 +972,7 @@ const Vehicles = () => {
         <MasterAutocomplete
           inputRef={setExpenseCellRef(row._id, "master")}
           value={row.master}
-          masters={masters}
+          masters={vehicleMasters}
           catalog={masterCatalog}
           onCatalogChange={reloadAfterMasterChange}
           onChange={(value) => updateExpenseField(row._id, "master", value)}
@@ -1241,10 +1266,22 @@ const Vehicles = () => {
                     onClick: handleDownloadVehicleXlsx,
                     busy: downloadingVehicleXlsx,
                   },
+                  {
+                    key: "gsheet",
+                    label: "Push to Google Sheet",
+                    description: "Paste a Sheet you own — its contents get replaced, formatted",
+                    onClick: () => {
+                      setVehicleExportMode("sheet");
+                      setShowVehicleExportModal(true);
+                    },
+                  },
                 ]}
               />
               <button
-                onClick={() => setShowVehicleExportModal(true)}
+                onClick={() => {
+                  setVehicleExportMode("email");
+                  setShowVehicleExportModal(true);
+                }}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"
               >
                 <FiGrid size={17} className="mr-2" /> Share Sheet
@@ -1461,7 +1498,7 @@ const Vehicles = () => {
                     {/* Draft row — always present, regardless of search/grouping */}
                     <ExpenseDraftRow
                       vehicles={vehicles}
-                      masters={masters}
+                      masters={vehicleMasters}
                       masterCatalog={masterCatalog}
                       reloadAfterMasterChange={reloadAfterMasterChange}
                       customColumns={customColumns}
@@ -1578,10 +1615,11 @@ const Vehicles = () => {
             title="Share the Vehicle Expense Sheet"
             onClose={() => setShowVehicleExportModal(false)}
             fetchStatus={fetchSheetsStatus}
-            onEmail={(email, note) => emailExpenseSheet(email, note, "vehicles")}
+            defaultMode={vehicleExportMode}
+            onEmail={(email, note, scope, format) => emailExpenseSheet(email, note, "vehicles", format)}
             onExport={(sheetUrl) => exportToGoogleSheet(sheetUrl, "vehicles")}
             emailDescription='Sends every vehicle-tagged expense as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
-            sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with the vehicle expense sheet."
+            sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with the vehicle expense sheet, formatted (bold header, borders, currency)."
           />
         )}
       </div>

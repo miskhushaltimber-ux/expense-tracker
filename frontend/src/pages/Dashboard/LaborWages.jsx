@@ -15,7 +15,15 @@ import {
   bulkDeletePayments,
 } from "../../api/labour";
 import { previewLabourImportSheet } from "../../api/imports";
-import { fetchLabourSheetsStatus, exportLabourToGoogleSheet, previewLabourFromGoogleSheet, emailLabourSheet, downloadLabourSheetXlsx } from "../../api/sheets";
+import {
+  fetchLabourSheetsStatus,
+  exportLabourToGoogleSheet,
+  previewLabourFromGoogleSheet,
+  emailLabourSheet,
+  downloadLabourSheetXlsx,
+  exportReportToGoogleSheet,
+  emailLabourReport,
+} from "../../api/sheets";
 import { FILE_PREFIX } from "../../constants/brand";
 import { downloadCsv } from "../../utils/exportCsv";
 import ImportSheetModal from "../../components/ImportSheetModal";
@@ -295,6 +303,25 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
   );
 };
 
+// A row's date, parsed to something comparable, for the Date From/To filter
+// (24 Sep, per Rishi: "also add filter in the labor dashboard" — Work Log and
+// Payments only had Mill + Contractor filters, not the Date range Expenses/
+// Vehicles already have). Payments carry a real <input type="date"> value in
+// row.date; Work Log carries row.dateLabel ("DD-MM-YYYY" or "DD-MM-YYYY TO
+// DD-MM-YYYY", see combineDateRange above) — its first date is what gets
+// compared, same idea as the Report tab's own parseDateLabel below.
+const parseRowDate = (row) => {
+  if (row.date) {
+    const dt = new Date(row.date);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const first = String(row.dateLabel || "").split(" TO ")[0].trim();
+  const [d, m, y] = first.split("-");
+  if (!d || !m || !y) return null;
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return isNaN(dt.getTime()) ? null : dt;
+};
+
 const LedgerSheet = ({
   rows,
   setRows, // (updater) => void — the parent's wageEntries/payments state setter, used for the draft row's optimistic insert (22 Sep, performance fix)
@@ -313,6 +340,8 @@ const LedgerSheet = ({
   sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
   millPicker, // true only for Work Log (23 Sep) — shows a per-entry Mill column/picker
   filterMillId, // optional — narrows rows to just this one mill's entries (Work Log only)
+  filterDateFrom, // optional — "YYYY-MM-DD", narrows rows to on/after this date
+  filterDateTo, // optional — "YYYY-MM-DD", narrows rows to on/before this date
 }) => {
   const isRange = dateMode === "range";
 
@@ -364,13 +393,19 @@ const LedgerSheet = ({
       rows.filter((r) => {
         if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
         if (filterMillId && resolveMillId(r) !== filterMillId) return false;
+        if (filterDateFrom || filterDateTo) {
+          const d = parseRowDate(r);
+          if (!d) return false;
+          if (filterDateFrom && d < new Date(filterDateFrom)) return false;
+          if (filterDateTo && d > new Date(`${filterDateTo}T23:59:59`)) return false;
+        }
         if (!search) return true;
         const c = contractorById.get(r.contractorId);
         const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
         return haystack.includes(search.toLowerCase());
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, allowedContractorIds, filterMillId, search, contractorById]
+    [rows, allowedContractorIds, filterMillId, filterDateFrom, filterDateTo, search, contractorById]
   );
 
   // --- Selecting rows for bulk delete (18 Sep, per Rishi: "add multi
@@ -612,7 +647,12 @@ const contractorReport = (contractor, ownWageEntries, ownPayments) => {
   const totalPaid = ownPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
   const openingBalance = Number(contractor.openingBalance || 0);
   const balance = openingBalance + totalEarned - totalPaid;
-  return { totalEarned, totalPaid, openingBalance, balance };
+  // Advance given, ALL-TIME (24 Sep, per Rishi: "how much advance we gave
+  // them and how much they owes us from before or past payments") — not
+  // scoped to whatever period the report is viewing, same as Balance below,
+  // so switching to "This Week" never hides an advance given last month.
+  const totalAdvance = ownPayments.filter(isAdvancePayment).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  return { totalEarned, totalPaid, openingBalance, balance, totalAdvance };
 };
 
 // A payment counts as an ADVANCE if its Label mentions it (23 Sep, per
@@ -808,10 +848,13 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
 
   // One row per contractor, every number pre-computed once here so both the
   // table body and the totals footer read from the same values. `report`
-  // (all-time) drives the real running Balance; `stats` (period-scoped)
-  // drives Earned/Paid/Advance and the Recent Payments column, so switching
-  // the period above never makes the Balance column lie about what's
-  // actually owed.
+  // (all-time) drives the real running Balance and total Advance given;
+  // `stats` (period-scoped) drives Earned/Paid and the Recent Payments
+  // column, so switching the period above never makes the Balance or
+  // Advance columns lie about what's actually owed (24 Sep, per Rishi:
+  // Advance moved from period-scoped `stats.advance` to all-time
+  // `report.totalAdvance` — same reasoning as Balance already had, so a
+  // "This Week" view doesn't hide an advance given last month).
   const rows = useMemo(() => {
     return shownContractors.map((c) => {
       const ownWageEntries = wageEntriesByContractor.get(c._id) || [];
@@ -829,7 +872,7 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
         (acc, r) => {
           acc.earned += r.stats.earned;
           acc.paid += r.stats.paid;
-          acc.advance += r.stats.advance;
+          acc.advance += r.report.totalAdvance;
           acc.balance += r.report.balance;
           return acc;
         },
@@ -843,6 +886,40 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
     () => new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }),
     []
   );
+
+  // Report tab's own Download/Share (24 Sep, per Rishi: "add the report to
+  // download or share option") — flat rows matching the table's visible
+  // columns (Recent Payments is left off, same as the CSV exports on the
+  // other two tabs drop nested detail), built once here so the CSV
+  // download, Google Sheet push and emailed attachment all use the exact
+  // same shape.
+  const reportHeader = ["Contractor", "Master", `Earned (${periodLabel})`, `Paid (${periodLabel})`, "Advance (All-Time)", "Balance", "Status"];
+  const reportRows = useMemo(
+    () =>
+      rows.map(({ contractor: c, report, stats, status }) => [
+        c.name,
+        c.contractorType || "",
+        stats.earned,
+        stats.paid,
+        report.totalAdvance,
+        report.balance,
+        status.label,
+      ]),
+    [rows]
+  );
+  const [showReportExportModal, setShowReportExportModal] = useState(false);
+  const [reportExportMode, setReportExportMode] = useState("email");
+  const handleExportReportCsv = () => {
+    if (reportRows.length === 0) {
+      alert("No contractors to export yet");
+      return;
+    }
+    downloadCsv(
+      `${FILE_PREFIX}-report-${todayStr()}.csv`,
+      reportHeader.map((label, i) => ({ key: `c${i}`, label })),
+      reportRows.map((row) => Object.fromEntries(row.map((v, i) => [`c${i}`, v])))
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -906,6 +983,31 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             Clear
           </button>
         )}
+        <div className="flex items-center gap-2 ml-auto pb-0.5">
+          <DownloadMenu
+            options={[
+              { key: "csv", label: "Download CSV", description: "Contractor report — Earned, Paid, Advance, Balance", onClick: handleExportReportCsv },
+              {
+                key: "gsheet",
+                label: "Push to Google Sheet",
+                description: "Paste a Sheet you own — its contents get replaced, formatted",
+                onClick: () => {
+                  setReportExportMode("sheet");
+                  setShowReportExportModal(true);
+                },
+              },
+            ]}
+          />
+          <button
+            onClick={() => {
+              setReportExportMode("email");
+              setShowReportExportModal(true);
+            }}
+            className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
+          >
+            <FiGrid size={14} className="mr-1.5" /> Share Sheet
+          </button>
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -918,7 +1020,7 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             <div>
               <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Contractor Report — {periodLabel}</h2>
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                Earned, Paid &amp; Advance reflect {periodLabel === "All Time" ? "all-time" : periodLabel.toLowerCase()} activity — Balance is always the running total as of today.
+                Earned &amp; Paid reflect {periodLabel === "All Time" ? "all-time" : periodLabel.toLowerCase()} activity — Advance and Balance are always the running total as of today, including past periods.
               </p>
             </div>
             <div className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
@@ -935,8 +1037,8 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
                   <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Master</th>
                   <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Earned</th>
                   <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Paid</th>
-                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Advance</th>
-                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Balance</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider" title="Total advance ever given, all-time — not just this period">Advance</th>
+                  <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider" title="Opening balance + Earned − Paid, as of today. Negative means the contractor owes money back (including unrecovered advances).">Balance</th>
                   <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">Status</th>
                   <th className="px-4 py-3 font-semibold text-[11px] uppercase tracking-wider">
                     <span className="flex items-center gap-1"><FiFileText size={12} /> Recent Payments</span>
@@ -953,7 +1055,7 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
                     <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{c.contractorType || "—"}</td>
                     <td className="px-4 py-3 align-top">{money(stats.earned)}</td>
                     <td className="px-4 py-3 align-top">{money(stats.paid)}</td>
-                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{stats.advance > 0 ? money(stats.advance) : "—"}</td>
+                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400 align-top">{report.totalAdvance > 0 ? money(report.totalAdvance) : "—"}</td>
                     <td className="px-4 py-3 font-semibold align-top">
                       {report.balance < 0 ? `${money(-report.balance)} owed back` : money(report.balance)}
                     </td>
@@ -1002,6 +1104,20 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
           </div>
         </div>
       )}
+
+      {showReportExportModal && (
+        <ExportSheetModal
+          title="Share the Report"
+          onClose={() => setShowReportExportModal(false)}
+          fetchStatus={fetchLabourSheetsStatus}
+          defaultMode={reportExportMode}
+          emailFormats={["csv"]}
+          onEmail={(email, note) => emailLabourReport(email, note, reportHeader, reportRows, `${FILE_PREFIX}-report-${todayStr()}.csv`, "Contractor Report")}
+          onExport={(sheetUrl) => exportReportToGoogleSheet(sheetUrl, reportHeader, reportRows)}
+          emailDescription="Sends the contractor report (Earned, Paid, Advance, Balance, Status) as a CSV attachment. No setup needed at the other end."
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with the report, formatted (bold header, borders, currency)."
+        />
+      )}
     </div>
   );
 };
@@ -1027,10 +1143,18 @@ const LaborWages = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [filterMill, setFilterMill] = useState("");
   const [filterContractors, setFilterContractors] = useState([]);
-  const activeFilterCount = (filterMill ? 1 : 0) + (filterContractors.length > 0 ? 1 : 0);
+  // Date From/To (24 Sep, per Rishi: "also add filter in the labor
+  // dashboard") — same Date range filter the Expense Sheet and Vehicle
+  // Expense Sheet already have, applied to both Work Log and Payments.
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+  const activeFilterCount =
+    (filterMill ? 1 : 0) + (filterContractors.length > 0 ? 1 : 0) + (filterDateFrom ? 1 : 0) + (filterDateTo ? 1 : 0);
   const clearFilters = () => {
     setFilterMill("");
     setFilterContractors([]);
+    setFilterDateFrom("");
+    setFilterDateTo("");
   };
 
   // Import/Download/Share for Work Log and Payments (18 Sep, per Rishi: "add
@@ -1041,6 +1165,10 @@ const LaborWages = () => {
   const [showWorkLogExportModal, setShowWorkLogExportModal] = useState(false);
   const [showPaymentsImportModal, setShowPaymentsImportModal] = useState(false);
   const [showPaymentsExportModal, setShowPaymentsExportModal] = useState(false);
+  // Which tab each Share Sheet modal opens into (24 Sep) — "sheet" from the
+  // Download menu's own "Push to Google Sheet" shortcut.
+  const [workLogExportMode, setWorkLogExportMode] = useState("email");
+  const [paymentsExportMode, setPaymentsExportMode] = useState("email");
 
   const contractorName = (id) => contractors.find((c) => c._id === id)?.name || "";
   const contractorMaster = (id) => contractors.find((c) => c._id === id)?.contractorType || "";
@@ -1283,6 +1411,24 @@ const LaborWages = () => {
               ))}
             </select>
           </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Date From</label>
+            <input
+              type="date"
+              value={filterDateFrom}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
+              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Date To</label>
+            <input
+              type="date"
+              value={filterDateTo}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </div>
           <div className="min-w-[14rem]">
             <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Contractor</label>
             <div className="flex flex-wrap gap-1.5 max-w-md">
@@ -1376,10 +1522,22 @@ const LaborWages = () => {
                     onClick: () => handleDownloadXlsx("combined", "No work log entries or payments to export yet"),
                     busy: downloadingXlsxType === "combined",
                   },
+                  {
+                    key: "gsheet",
+                    label: "Push to Google Sheet",
+                    description: "Paste a Sheet you own — its contents get replaced, formatted",
+                    onClick: () => {
+                      setWorkLogExportMode("sheet");
+                      setShowWorkLogExportModal(true);
+                    },
+                  },
                 ]}
               />
               <button
-                onClick={() => setShowWorkLogExportModal(true)}
+                onClick={() => {
+                  setWorkLogExportMode("email");
+                  setShowWorkLogExportModal(true);
+                }}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
               >
                 <FiGrid size={14} className="mr-1.5" /> Share Sheet
@@ -1421,6 +1579,8 @@ const LaborWages = () => {
               sheetKey="wageEntries"
               millPicker
               filterMillId={filterMill}
+              filterDateFrom={filterDateFrom}
+              filterDateTo={filterDateTo}
             />
           </div>
         </div>
@@ -1460,10 +1620,22 @@ const LaborWages = () => {
                     onClick: () => handleDownloadXlsx("combined", "No work log entries or payments to export yet"),
                     busy: downloadingXlsxType === "combined",
                   },
+                  {
+                    key: "gsheet",
+                    label: "Push to Google Sheet",
+                    description: "Paste a Sheet you own — its contents get replaced, formatted",
+                    onClick: () => {
+                      setPaymentsExportMode("sheet");
+                      setShowPaymentsExportModal(true);
+                    },
+                  },
                 ]}
               />
               <button
-                onClick={() => setShowPaymentsExportModal(true)}
+                onClick={() => {
+                  setPaymentsExportMode("email");
+                  setShowPaymentsExportModal(true);
+                }}
                 className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-xs font-medium"
               >
                 <FiGrid size={14} className="mr-1.5" /> Share Sheet
@@ -1497,6 +1669,8 @@ const LaborWages = () => {
               search={search}
               allowedContractorIds={allowedContractorIds}
               sheetKey="payments"
+              filterDateFrom={filterDateFrom}
+              filterDateTo={filterDateTo}
             />
           </div>
         </div>
@@ -1565,10 +1739,11 @@ const LaborWages = () => {
           title="Share the Work Log"
           onClose={() => setShowWorkLogExportModal(false)}
           fetchStatus={fetchLabourSheetsStatus}
-          onEmail={(email, note, scope) => emailLabourSheet(email, note, scope || "worklog")}
+          defaultMode={workLogExportMode}
+          onEmail={(email, note, scope, format) => emailLabourSheet(email, note, scope || "worklog", format)}
           onExport={(sheetUrl, scope) => exportLabourToGoogleSheet(sheetUrl, scope || "worklog")}
           emailDescription='Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
-          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced."
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced, formatted (bold header, borders, currency)."
           scopeOptions={[
             { key: "worklog", label: "Work Log only" },
             { key: "combined", label: "Work Log + Payments (combined)" },
@@ -1625,10 +1800,11 @@ const LaborWages = () => {
           title="Share the Payments Sheet"
           onClose={() => setShowPaymentsExportModal(false)}
           fetchStatus={fetchLabourSheetsStatus}
-          onEmail={(email, note, scope) => emailLabourSheet(email, note, scope || "payments")}
+          defaultMode={paymentsExportMode}
+          onEmail={(email, note, scope, format) => emailLabourSheet(email, note, scope || "payments", format)}
           onExport={(sheetUrl, scope) => exportLabourToGoogleSheet(sheetUrl, scope || "payments")}
           emailDescription='Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose "Open with Google Sheets".'
-          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced."
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced, formatted (bold header, borders, currency)."
           scopeOptions={[
             { key: "payments", label: "Payments only" },
             { key: "combined", label: "Work Log + Payments (combined)" },

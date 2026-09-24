@@ -23,6 +23,7 @@ import { fetchBudgets, saveBudgets } from "/src/api/budgets";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import DownloadMenu from "/src/components/DownloadMenu";
+import ExportSheetModal from "/src/components/ExportSheetModal";
 import { fetchVehicles } from "/src/api/vehicles";
 import { looksLikeVehicleExpense, findPossibleDuplicate, duplicateWarning } from "/src/utils/vehicleExpense";
 import {
@@ -162,8 +163,25 @@ const DraftRow = ({
         vehicleId: vehicleId || undefined,
         customFields: submittedDraft.customFields,
       });
-      setRows((prev) => prev.map((r) => (r._id === tempId ? saved : r)));
-      notifySuccess("Row added");
+      // 24 Sep, per Rishi: "the app itself gets to know what type of
+      // payment it is just by reading the master... peeling thekedar and
+      // the app recongnizes it as new master for the labor section" — a
+      // Thekedar Master never becomes an Expense row at all; the backend
+      // routed it straight to a Labor Wages Payment instead (auto-creating
+      // the Contractor the first time that Master is used), so the
+      // placeholder row here gets removed rather than swapped in, and a
+      // toast explains where it actually landed.
+      if (saved?.routedTo === "labour-payment") {
+        setRows((prev) => prev.filter((r) => r._id !== tempId));
+        notifySuccess(
+          `Recognized "${saved.master}" as a Labor Wages master — saved as a payment to ${saved.contractorName}${
+            saved.contractorCreated ? " (new contractor created)" : ""
+          } instead of the Expense Sheet.`
+        );
+      } else {
+        setRows((prev) => prev.map((r) => (r._id === tempId ? saved : r)));
+        notifySuccess("Row added");
+      }
     } catch (err) {
       setRows((prev) => prev.filter((r) => r._id !== tempId));
       setDraft(submittedDraft);
@@ -351,6 +369,10 @@ const Expenses = () => {
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  // Which tab the Share Sheet modal opens into (24 Sep) — "email" from the
+  // Share Sheet button, "sheet" from the Download menu's own "Push to Google
+  // Sheet" shortcut, so that one's one click instead of two.
+  const [exportModalMode, setExportModalMode] = useState("email");
 
   // rowKey (row._id, or "draft") + field name -> the actual <input> DOM node,
   // so Enter can move focus to a specific cell like Tab does natively.
@@ -932,10 +954,22 @@ const Expenses = () => {
                   onClick: handleDownloadXlsx,
                   busy: downloadingXlsx,
                 },
+                {
+                  key: "gsheet",
+                  label: "Push to Google Sheet",
+                  description: "Paste a Sheet you own — its contents get replaced, formatted",
+                  onClick: () => {
+                    setExportModalMode("sheet");
+                    setShowExportModal(true);
+                  },
+                },
               ]}
             />
             <button
-              onClick={() => setShowExportModal(true)}
+              onClick={() => {
+                setExportModalMode("email");
+                setShowExportModal(true);
+              }}
               className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"
             >
               <FiGrid size={17} className="mr-2" /> Share Sheet
@@ -1206,7 +1240,17 @@ const Expenses = () => {
         />
       )}
 
-      {showExportModal && <ExportModal onClose={() => setShowExportModal(false)} />}
+      {showExportModal && (
+        <ExportSheetModal
+          onClose={() => setShowExportModal(false)}
+          fetchStatus={fetchSheetsStatus}
+          defaultMode={exportModalMode}
+          emailDescription="Sends the whole expense sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose &quot;Open with Google Sheets&quot;."
+          sheetDescription="For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with everything in this expense sheet, formatted (bold header, borders, currency)."
+          onEmail={(email, note, scope, format) => emailExpenseSheet(email, note, undefined, format)}
+          onExport={(sheetUrl) => exportToGoogleSheet(sheetUrl)}
+        />
+      )}
 
       {vehiclePrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
@@ -1541,163 +1585,6 @@ const ImportModal = ({ onClose, onImported, existingRows = [] }) => {
                 {committing ? "Importing..." : `Import ${preview.rows.filter((r) => r.include).length} Rows`}
               </button>
             </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// --- Export modal: email the sheet, or push it into a Google Sheet you own ---
-//
-// Emailing is the default because it needs no setup from anyone: type an
-// address, hit send. The app deliberately does NOT create a Google Sheet and
-// share it — service accounts on free Google accounts have zero Drive storage
-// quota, so creating one is impossible. Emailing an .xlsx gets the same result
-// with less friction, and Gmail's "Open with Google Sheets" turns it into a
-// live Sheet in one click.
-const ExportModal = ({ onClose }) => {
-  const [status, setStatus] = useState(null);
-  const [mode, setMode] = useState("email"); // "email" | "sheet"
-
-  const [email, setEmail] = useState("");
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
-
-  const [sheetUrl, setSheetUrl] = useState("");
-  const [exporting, setExporting] = useState(false);
-
-  useEffect(() => {
-    fetchSheetsStatus().then(setStatus).catch(() => {});
-  }, []);
-
-  const handleEmail = async () => {
-    if (!email.trim()) {
-      notifyError("Enter an email address first");
-      return;
-    }
-    try {
-      setSending(true);
-      const result = await emailExpenseSheet(email.trim(), note.trim());
-      notifySuccess(result.message || "Sheet emailed");
-      onClose();
-    } catch (err) {
-      notifyError(err.message || "Failed to send");
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleExport = async () => {
-    if (!sheetUrl.trim()) {
-      notifyError("Paste the Google Sheet's link or ID first");
-      return;
-    }
-    try {
-      setExporting(true);
-      const result = await exportToGoogleSheet(sheetUrl.trim());
-      notifySuccess(result.message || "Exported to Google Sheet");
-    } catch (err) {
-      notifyError(err.message || "Failed to export");
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const tabClass = (active) =>
-    `px-4 py-2 rounded-lg text-sm font-medium ${
-      active ? "bg-red-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
-    }`;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
-      <div className="bg-white dark:bg-gray-800 p-5 sm:p-6 rounded-xl shadow-xl w-full max-w-md relative border-2 border-gray-200 dark:border-gray-700">
-        <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
-          <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center">
-            <FiGrid className="mr-2" /> Share the Sheet
-          </h2>
-          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">
-            <FiX size={20} />
-          </button>
-        </div>
-
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => setMode("email")} className={tabClass(mode === "email")}>
-            Email it
-          </button>
-          <button onClick={() => setMode("sheet")} className={tabClass(mode === "sheet")}>
-            To a Google Sheet
-          </button>
-        </div>
-
-        {mode === "email" ? (
-          <>
-            {status && status.emailConfigured === false && (
-              <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
-                Email isn't set up on the server yet — it needs
-                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">EMAIL_USER</code> and
-                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">EMAIL_APP_PASSWORD</code>
-                (the same two the password reset needs). See
-                <code className="ml-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">backend/.env.example</code>.
-              </div>
-            )}
-
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              Sends the whole expense sheet as a spreadsheet attachment. No setup needed at the other
-              end — in Gmail they can click the file and choose "Open with Google Sheets".
-            </p>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleEmail()}
-              placeholder="name@example.com"
-              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              placeholder="Optional message to include..."
-              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
-            <button
-              onClick={handleEmail}
-              disabled={sending}
-              className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-60"
-            >
-              {sending ? "Sending..." : "Send Sheet"}
-            </button>
-          </>
-        ) : (
-          <>
-            {status && !status.configured && (
-              <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
-                Google Sheets sync isn't set up on the server yet — it needs the
-                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">GOOGLE_SERVICE_ACCOUNT_KEY</code>
-                env var (see <code className="px-1 bg-amber-100 dark:bg-amber-900/50 rounded">backend/.env.example</code>).
-              </div>
-            )}
-
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared
-              with the app's service account as an Editor — its contents get replaced with everything
-              in this expense sheet.
-            </p>
-            <input
-              type="text"
-              value={sheetUrl}
-              onChange={(e) => setSheetUrl(e.target.value)}
-              placeholder="https://docs.google.com/spreadsheets/d/..."
-              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
-            <button
-              onClick={handleExport}
-              disabled={exporting}
-              className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-60"
-            >
-              {exporting ? "Exporting..." : "Export"}
-            </button>
           </>
         )}
       </div>

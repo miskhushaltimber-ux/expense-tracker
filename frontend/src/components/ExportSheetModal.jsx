@@ -19,7 +19,7 @@ const ExportSheetModal = ({
   onEmail,
   onExport,
   emailDescription = "Sends the sheet as a spreadsheet attachment. No setup needed at the other end — in Gmail they can click the file and choose \"Open with Google Sheets\".",
-  sheetDescription = "For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced.",
+  sheetDescription = "For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared with the app's service account as an Editor — its contents get replaced with a formatted table (bold header, borders, currency).",
   // scopeOptions (23 Sep, per Rishi: "when i share... using combined switch
   // it just prints the worklog page or payment page and dont print both
   // combined") — Labor Wages passes [{key,label}] so this ONE modal can also
@@ -27,10 +27,26 @@ const ExportSheetModal = ({
   // it was opened from. Omitted entirely by Expenses/Vehicles, which only
   // ever have one sheet to share — nothing changes for them.
   scopeOptions,
+  // defaultMode (24 Sep) — lets a caller open this modal straight into the
+  // "To a Google Sheet" tab, e.g. a "Push to Google Sheet" entry in the
+  // Download menu, instead of always landing on "Email it" first.
+  defaultMode = "email",
+  // emailFormats (24 Sep, Report tab's own Download/Share) — the Excel-vs-
+  // CSV dropdown only makes sense when the caller can actually build both.
+  // The Report tab only ever sends CSV (its data comes pre-computed from the
+  // frontend, not a server-side workbook builder), so it passes ["csv"] and
+  // the dropdown is skipped entirely rather than offering a choice that
+  // silently wouldn't change anything.
+  emailFormats = ["xlsx", "csv"],
 }) => {
   const [status, setStatus] = useState(null);
-  const [mode, setMode] = useState("email"); // "email" | "sheet"
+  const [mode, setMode] = useState(defaultMode); // "email" | "sheet"
   const [scope, setScope] = useState(scopeOptions?.[0]?.key || null);
+  // Email format (24 Sep, per Rishi: "give one dropdown where we can choose
+  // in which format we are sharing the sheets") — "Email it" can send the
+  // formatted .xlsx report (default) or a plain .csv. Only meaningful for
+  // email; pushing to a Google Sheet is always live, no format to pick.
+  const [format, setFormat] = useState(emailFormats[0]);
 
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
@@ -50,7 +66,7 @@ const ExportSheetModal = ({
     }
     try {
       setSending(true);
-      const result = await onEmail(email.trim(), note.trim(), scope);
+      const result = await onEmail(email.trim(), note.trim(), scope, format);
       notifySuccess(result?.message || "Sheet emailed");
       onClose();
     } catch (err) {
@@ -136,6 +152,21 @@ const ExportSheetModal = ({
             )}
 
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">{emailDescription}</p>
+
+            {emailFormats.length > 1 && (
+              <>
+                <label className="block text-xs font-medium mb-1.5 text-gray-500 dark:text-gray-400">Format</label>
+                <select
+                  value={format}
+                  onChange={(e) => setFormat(e.target.value)}
+                  className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-red-500"
+                >
+                  {emailFormats.includes("xlsx") && <option value="xlsx">Excel (.xlsx) — formatted report, ready to print</option>}
+                  {emailFormats.includes("csv") && <option value="csv">CSV (.csv) — plain, opens anywhere</option>}
+                </select>
+              </>
+            )}
+
             <input
               type="email"
               value={email}

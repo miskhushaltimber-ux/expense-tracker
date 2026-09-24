@@ -69,13 +69,14 @@ export const previewFromGoogleSheet = async (sheetUrl) => {
 };
 
 /**
- * Emails the whole expense sheet as an .xlsx attachment to any address.
- * Needs no Google setup at all on the recipient's side. scope: "vehicles"
- * narrows to only vehicle-tagged expenses.
+ * Emails the whole expense sheet to any address. Needs no Google setup at
+ * all on the recipient's side. scope: "vehicles" narrows to only
+ * vehicle-tagged expenses. format: "xlsx" (default, a formatted report) or
+ * "csv" (24 Sep, per Rishi: a format choice in the Share Sheet dropdown).
  */
-export const emailExpenseSheet = async (email, note, scope) => {
+export const emailExpenseSheet = async (email, note, scope, format) => {
   try {
-    const response = await apiClient.post("/sheets/email", { email, note, scope });
+    const response = await apiClient.post("/sheets/email", { email, note, scope, format });
     return response.data;
   } catch (error) {
     console.error("Error emailing the expense sheet:", error.response?.data || error);
@@ -116,9 +117,10 @@ export const previewLabourFromGoogleSheet = async (sheetUrl, type) => {
   }
 };
 
-export const emailLabourSheet = async (email, note, type) => {
+// format: "xlsx" (default) or "csv" — see emailExpenseSheet's comment above.
+export const emailLabourSheet = async (email, note, type, format) => {
   try {
-    const response = await apiClient.post(`${LABOUR_BASE_URL}/email`, { email, note, type });
+    const response = await apiClient.post(`${LABOUR_BASE_URL}/email`, { email, note, type, format });
     return response.data;
   } catch (error) {
     console.error("Error emailing the labour sheet:", error.response?.data || error);
@@ -134,5 +136,29 @@ export const downloadLabourSheetXlsx = async (type) => {
     downloadBlobResponse(response, "labour.xlsx");
   } catch (error) {
     throw new Error("Couldn't download that file. Please try again.");
+  }
+};
+
+// --- Labor Wages Report tab (24 Sep, per Rishi: "add the report to
+// download or share option") — unlike the calls above, the Report's numbers
+// are computed in the frontend (SummaryReport), so these take the
+// already-built header + rows rather than a `type`.
+export const exportReportToGoogleSheet = async (sheetUrl, header, rows) => {
+  try {
+    const response = await apiClient.post(`${LABOUR_BASE_URL}/report/export`, { sheetUrl, header, rows });
+    return response.data;
+  } catch (error) {
+    console.error("Error exporting the report to Google Sheet:", error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || "Failed to export to Google Sheet.");
+  }
+};
+
+export const emailLabourReport = async (email, note, header, rows, fileName, title) => {
+  try {
+    const response = await apiClient.post(`${LABOUR_BASE_URL}/report/email`, { email, note, header, rows, fileName, title });
+    return response.data;
+  } catch (error) {
+    console.error("Error emailing the report:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to send that email.");
   }
 };

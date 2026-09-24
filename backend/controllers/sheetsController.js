@@ -5,6 +5,7 @@ import { resolveImportDestinations } from "../utils/importDestinations.js";
 import { listVehiclesByUser } from "../models/vehicleStore.js";
 import { buildExpensesWorkbook, expensesFileName } from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendExpenseSheetEmail } from "../utils/mailer.js";
+import { rowsToCsv } from "../utils/csv.js";
 
 export const getSheetsStatus = (req, res) => {
   res.json({ configured: isGoogleSheetsConfigured(), emailConfigured: isEmailConfigured() });
@@ -20,9 +21,11 @@ const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value
 // emailed file needs no sharing setup and works for any address.
 // scope: "vehicles" narrows to only vehicle-tagged expenses (Vehicles.jsx's
 // Vehicle Expense Sheet); anything else (undefined, "all") keeps Expenses.jsx's
-// existing behaviour unchanged.
+// existing behaviour unchanged. format: "csv" sends a plain .csv instead of
+// the default formatted .xlsx (24 Sep, per Rishi: "give one dropdown where
+// we can choose in which format we are sharing the sheets").
 export const emailSheet = async (req, res) => {
-  const { email, note, scope } = req.body;
+  const { email, note, scope, format } = req.body;
   if (!looksLikeEmail(email)) {
     return res.status(400).json({ message: "Enter a valid email address" });
   }
@@ -39,17 +42,34 @@ export const emailSheet = async (req, res) => {
 
     const ordered = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
     const vehiclesById = new Map(vehicles.map((v) => [v._id, v]));
-    const buffer = await buildExpensesWorkbook(ordered, vehiclesById);
     const total = ordered.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    let buffer, fileName, contentType;
+    if (format === "csv") {
+      const header = scope === "vehicles" ? ["Date", "Vehicle", "Expense", "Amount (INR)", "Master"] : ["Date", "Expense", "Amount (INR)", "Master"];
+      const rows = ordered.map((e) => {
+        const row = [new Date(e.date).toLocaleDateString("en-IN")];
+        if (scope === "vehicles") row.push(vehiclesById.get(e.vehicleId)?.name || "");
+        row.push(e.expense, e.amount, e.master);
+        return row;
+      });
+      buffer = Buffer.from(rowsToCsv(header, rows), "utf8");
+      fileName = expensesFileName().replace(/\.xlsx$/, ".csv");
+      contentType = "text/csv";
+    } else {
+      buffer = await buildExpensesWorkbook(ordered, vehiclesById);
+      fileName = expensesFileName();
+    }
 
     await sendExpenseSheetEmail({
       toEmail: email.trim(),
-      fileName: expensesFileName(),
+      fileName,
       buffer,
       count: ordered.length,
       total,
       note,
       scopeLabel: scope === "vehicles" ? "vehicle expense sheet" : "expense sheet",
+      contentType,
     });
 
     res.json({

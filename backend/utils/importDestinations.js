@@ -59,7 +59,7 @@ import { listContractorsByUser, createContractor } from "../models/labourStore.j
 const THEKEDAR_RE = /thekedar/i;
 const MILL_UNIT_SUFFIX_RE = /\s+[A-Za-z]-?\d+(?:\/\d+)?$/;
 
-const isThekedarMaster = (master) => THEKEDAR_RE.test(master || "");
+export const isThekedarMaster = (master) => THEKEDAR_RE.test(master || "");
 
 const contractorNameFromMaster = (master) => (master || "").trim().replace(MILL_UNIT_SUFFIX_RE, "").trim();
 
@@ -116,6 +116,31 @@ const findVehicleInText = (vehicles, text) => {
 const findContractorInText = (contractors, text) => {
   const sorted = [...contractors].sort((a, b) => (b.name || "").length - (a.name || "").length);
   return sorted.find((c) => c.name && containsWhole(text, c.name)) || null;
+};
+
+// Single-row version of the Thekedar-Master auto-routing above (24 Sep, per
+// Rishi: "the app itself gets to know what type of payment it is just by
+// reading the master... example in expense sheet we put peeling thekedar
+// and the app recongnizes it as new master for the labor section") — same
+// matching/mill-suffix-stripping/auto-create-Contractor logic as the import
+// path, just usable for ONE row at a time so addExpense (a normal typed-in
+// row on the Expense Sheet, not an import) can reroute it before it's ever
+// saved as a plain expense. Returns null when the master doesn't look like
+// a Thekedar category at all, so the caller's normal expense path runs
+// unchanged.
+export const resolveThekedarContractor = async (master, userId) => {
+  if (!isThekedarMaster(master)) return null;
+  const contractorName = contractorNameFromMaster(master);
+  if (!contractorName) return null;
+
+  const contractors = await listContractorsByUser(userId);
+  let contractor = findContractorByColumn(contractors, contractorName);
+  let created = false;
+  if (!contractor) {
+    contractor = await createContractor({ userId, name: contractorName, millId: "" });
+    created = true;
+  }
+  return { contractor, created };
 };
 
 export const resolveImportDestinations = async (rows, userId) => {
