@@ -316,6 +316,17 @@ const LedgerSheet = ({
 }) => {
   const isRange = dateMode === "range";
 
+  // 24 Sep, per Rishi: "its still lagging and loading so much... getting
+  // more and more" — found it. Every row (below, and in the render loop
+  // further down) was calling contractorOptions.find(...) to look up its own
+  // contractor — a full linear scan through every contractor for EVERY row,
+  // on every render. With hundreds of Work Log/Payment rows that's hundreds
+  // times however many contractors exist, every single time this component
+  // re-renders — and it gets slower every day as more rows get added, which
+  // matches exactly what was reported. One Map built once per render instead
+  // turns that into a single O(1) lookup per row.
+  const contractorById = useMemo(() => new Map(contractorOptions.map((o) => [o.value, o])), [contractorOptions]);
+
   // A row's mill, resolved the same way everywhere it's needed (display,
   // filtering): trust the row's own millId if it has one; otherwise, if the
   // contractor only covers one mill, there was never any ambiguity to begin
@@ -323,13 +334,13 @@ const LedgerSheet = ({
   // showing correctly instead of going blank.
   const resolveMillId = (row) => {
     if (row.millId) return row.millId;
-    const millList = contractorOptions.find((o) => o.value === row.contractorId)?.millList || [];
+    const millList = contractorById.get(row.contractorId)?.millList || [];
     return millList.length === 1 ? millList[0]._id : null;
   };
   const resolveMillName = (row) => {
     const id = resolveMillId(row);
     if (!id) return "—";
-    const millList = contractorOptions.find((o) => o.value === row.contractorId)?.millList || [];
+    const millList = contractorById.get(row.contractorId)?.millList || [];
     return millList.find((m) => m._id === id)?.name || "—";
   };
 
@@ -343,14 +354,24 @@ const LedgerSheet = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetKey]);
 
-  const filtered = rows.filter((r) => {
-    if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
-    if (filterMillId && resolveMillId(r) !== filterMillId) return false;
-    if (!search) return true;
-    const c = contractorOptions.find((o) => o.value === r.contractorId);
-    const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
-    return haystack.includes(search.toLowerCase());
-  });
+  // Memoized (24 Sep) — this used to re-filter and re-scan every row on
+  // EVERY render of this component, including ones that had nothing to do
+  // with the ledger (e.g. a sibling toggling something elsewhere on the
+  // page). Now it only redoes the work when the rows, search text, mill
+  // filter, or contractor scope actually change.
+  const filtered = useMemo(
+    () =>
+      rows.filter((r) => {
+        if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
+        if (filterMillId && resolveMillId(r) !== filterMillId) return false;
+        if (!search) return true;
+        const c = contractorById.get(r.contractorId);
+        const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
+        return haystack.includes(search.toLowerCase());
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, allowedContractorIds, filterMillId, search, contractorById]
+  );
 
   // --- Selecting rows for bulk delete (18 Sep, per Rishi: "add multi
   // deletation in vehicle and labor wages page just like the feature that we
@@ -514,7 +535,7 @@ const LedgerSheet = ({
         )}
 
         {filtered.map((row) => {
-          const c = contractorOptions.find((o) => o.value === row.contractorId);
+          const c = contractorById.get(row.contractorId);
           return (
             <tr
               key={row._id}
@@ -574,13 +595,21 @@ const LedgerSheet = ({
 // contractor's been paid more than they've earned, "owes back". Each
 // contractor's numbers are self-contained so "every report can be seen
 // separately" — the dropdown just filters which card(s) show.
-const contractorReport = (contractor, wageEntries, payments) => {
-  const totalEarned = wageEntries
-    .filter((w) => w.contractorId === contractor._id)
-    .reduce((sum, w) => sum + Number(w.amount || 0), 0);
-  const totalPaid = payments
-    .filter((p) => p.contractorId === contractor._id)
-    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+//
+// 24 Sep, per Rishi: "its still lagging and loading so much... getting more
+// and more" — this used to take the ENTIRE wageEntries/payments arrays and
+// .filter() them down per contractor, three separate times (here, in
+// periodStats, and in paymentStatus) for EVERY contractor shown. That's
+// O(contractors × every entry you've ever logged) redone on every render —
+// it gets slower every single day as more rows get added, which is exactly
+// the symptom reported. Fixed by grouping wageEntries/payments by
+// contractorId ONCE (see wageEntriesByContractor/paymentsByContractor in
+// SummaryReport below) and having these three functions work on just that
+// one contractor's own already-narrowed rows instead of re-scanning
+// everyone else's.
+const contractorReport = (contractor, ownWageEntries, ownPayments) => {
+  const totalEarned = ownWageEntries.reduce((sum, w) => sum + Number(w.amount || 0), 0);
+  const totalPaid = ownPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
   const openingBalance = Number(contractor.openingBalance || 0);
   const balance = openingBalance + totalEarned - totalPaid;
   return { totalEarned, totalPaid, openingBalance, balance };
@@ -648,14 +677,14 @@ const formatShortDate = (iso) => {
 // deliberately NOT computed here — it's real money owed and has to stay the
 // true running total regardless of which period is being viewed; see
 // contractorReport above for that.
-const periodStats = (contractor, wageEntries, payments, periodKey) => {
-  const earned = wageEntries
-    .filter((w) => w.contractorId === contractor._id && inPeriod(parseDateLabel(w.dateLabel), periodKey))
+// ownPayments arrives already sorted newest-first (see paymentsByContractor
+// in SummaryReport) so recentPayments doesn't need its own sort here.
+const periodStats = (ownWageEntries, ownPayments, periodKey) => {
+  const earned = ownWageEntries
+    .filter((w) => inPeriod(parseDateLabel(w.dateLabel), periodKey))
     .reduce((sum, w) => sum + Number(w.amount || 0), 0);
 
-  const periodPayments = payments
-    .filter((p) => p.contractorId === contractor._id && inPeriod(p.date ? new Date(p.date) : null, periodKey))
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  const periodPayments = ownPayments.filter((p) => inPeriod(p.date ? new Date(p.date) : null, periodKey));
 
   const paid = periodPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
   const advance = periodPayments.filter(isAdvancePayment).reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -673,12 +702,12 @@ const periodStats = (contractor, wageEntries, payments, periodKey) => {
 // window has passed with money still owed, or nothing has ever been paid at
 // all despite work being logged.
 const DELAY_THRESHOLD_DAYS = 14;
-const paymentStatus = (contractor, wageEntries, payments, balance) => {
+// ownPayments arrives already sorted newest-first, so its first dated entry
+// IS the most recent payment — no need to re-scan for the max date.
+const paymentStatus = (ownPayments, balance) => {
   if (balance <= 0) return { key: "green", label: "Paid up" };
-  const contractorPayments = payments.filter((p) => p.contractorId === contractor._id && p.date);
-  const lastPaymentMs = contractorPayments.length
-    ? Math.max(...contractorPayments.map((p) => new Date(p.date).getTime()))
-    : null;
+  const mostRecent = ownPayments.find((p) => p.date);
+  const lastPaymentMs = mostRecent ? new Date(mostRecent.date).getTime() : null;
   const daysSincePayment = lastPaymentMs ? (Date.now() - lastPaymentMs) / 86400000 : Infinity;
   return daysSincePayment > DELAY_THRESHOLD_DAYS
     ? { key: "red", label: "Delayed" }
@@ -722,22 +751,60 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   const [period, setPeriod] = useState("all");
   const periodLabel = PERIOD_OPTIONS.find((p) => p.key === period)?.label || "All Time";
 
-  const inScope = allowedContractorIds ? contractors.filter((c) => allowedContractorIds.has(c._id)) : contractors;
-  const optionsInScope = allowedContractorIds
-    ? contractorOptions.filter((o) => allowedContractorIds.has(o.value))
-    : contractorOptions;
+  // 24 Sep, performance fix (see contractorReport's comment above for the
+  // full story) — group wageEntries/payments by contractorId ONCE, only
+  // redone when the underlying data actually changes, instead of every
+  // contractor re-scanning the entire ledger on every render. Payments are
+  // sorted newest-first here too, once, since both periodStats' "Recent
+  // Payments" list and paymentStatus' "days since last payment" check need
+  // that order and neither should have to re-sort per contractor.
+  const wageEntriesByContractor = useMemo(() => {
+    const map = new Map();
+    for (const w of wageEntries) {
+      if (!map.has(w.contractorId)) map.set(w.contractorId, []);
+      map.get(w.contractorId).push(w);
+    }
+    return map;
+  }, [wageEntries]);
+  const paymentsByContractor = useMemo(() => {
+    const map = new Map();
+    for (const p of payments) {
+      if (!map.has(p.contractorId)) map.set(p.contractorId, []);
+      map.get(p.contractorId).push(p);
+    }
+    for (const list of map.values()) list.sort((a, b) => new Date(b.date) - new Date(a.date));
+    return map;
+  }, [payments]);
+
+  // inScope/optionsInScope/shownContractors are all now properly memoized —
+  // before this fix they were plain .filter() calls re-run on every render,
+  // producing a NEW array each time even when nothing relevant changed,
+  // which silently defeated the `rows` useMemo below (its dependency was
+  // never actually stable, so it recomputed every render regardless).
+  const inScope = useMemo(
+    () => (allowedContractorIds ? contractors.filter((c) => allowedContractorIds.has(c._id)) : contractors),
+    [contractors, allowedContractorIds]
+  );
+  const optionsInScope = useMemo(
+    () => (allowedContractorIds ? contractorOptions.filter((o) => allowedContractorIds.has(o.value)) : contractorOptions),
+    [contractorOptions, allowedContractorIds]
+  );
   const masterOptions = useMemo(
     () => [...new Set(inScope.map((c) => c.contractorType).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [inScope]
   );
 
   const q = search.trim().toLowerCase();
-  const shownContractors = inScope.filter((c) => {
-    if (selected && c._id !== selected) return false;
-    if (filterMaster && c.contractorType !== filterMaster) return false;
-    if (q && !c.name.toLowerCase().includes(q)) return false;
-    return true;
-  });
+  const shownContractors = useMemo(
+    () =>
+      inScope.filter((c) => {
+        if (selected && c._id !== selected) return false;
+        if (filterMaster && c.contractorType !== filterMaster) return false;
+        if (q && !c.name.toLowerCase().includes(q)) return false;
+        return true;
+      }),
+    [inScope, selected, filterMaster, q]
+  );
 
   // One row per contractor, every number pre-computed once here so both the
   // table body and the totals footer read from the same values. `report`
@@ -747,12 +814,14 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   // actually owed.
   const rows = useMemo(() => {
     return shownContractors.map((c) => {
-      const report = contractorReport(c, wageEntries, payments);
-      const stats = periodStats(c, wageEntries, payments, period);
-      const status = paymentStatus(c, wageEntries, payments, report.balance);
+      const ownWageEntries = wageEntriesByContractor.get(c._id) || [];
+      const ownPayments = paymentsByContractor.get(c._id) || [];
+      const report = contractorReport(c, ownWageEntries, ownPayments);
+      const stats = periodStats(ownWageEntries, ownPayments, period);
+      const status = paymentStatus(ownPayments, report.balance);
       return { contractor: c, report, stats, status };
     });
-  }, [shownContractors, wageEntries, payments, period]);
+  }, [shownContractors, wageEntriesByContractor, paymentsByContractor, period]);
 
   const totals = useMemo(
     () =>
