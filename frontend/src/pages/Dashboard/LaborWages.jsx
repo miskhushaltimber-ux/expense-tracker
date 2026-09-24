@@ -263,11 +263,11 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
             >
               <option value="">Which mill?</option>
               {contractorMills.map((m) => (
-                <option key={m._id} value={m._id}>{m.location}</option>
+                <option key={m._id} value={m._id}>{m.name}</option>
               ))}
             </select>
           ) : (
-            <span className="text-gray-400 text-xs">{contractorMills[0]?.location || "—"}</span>
+            <span className="text-gray-400 text-xs">{contractorMills[0]?.name || "—"}</span>
           )}
         </td>
       )}
@@ -370,13 +370,11 @@ const LedgerSheet = ({
     const id = resolveMillId(row);
     if (!id) return "—";
     const millList = contractorById.get(row.contractorId)?.millList || [];
-    // 24 Sep, per Rishi ("remove mills from the contractor's name, just show
-    // the location like KTPL 1, KTPL 2") — the Mill's own `name` field is
-    // where he'd been putting work-category words (Repso, Bundle, Core
-    // Loading, ...) that belong on the Contractor's Master field instead, so
-    // showing it here was surfacing that mix-up everywhere a Mill appears.
-    // `location` is the field that actually identifies which mill this is.
-    return millList.find((m) => m._id === id)?.location || "—";
+    // 24 Sep, per Rishi — this IS what the Mill column should show (Repso,
+    // Bundle, Core Loading, ...); an earlier pass mistakenly swapped this to
+    // `location`, which only broke rows whose Mill has no location set.
+    // `location` is used just for the Contractor label's "(KTPL I)" suffix.
+    return millList.find((m) => m._id === id)?.name || "—";
   };
 
   // Custom columns (21 Sep) — Work Log and Payments keep independent column
@@ -1184,8 +1182,15 @@ const LaborWages = () => {
   const wageEntryMillName = (w) => {
     const millList = contractorOptions.find((o) => o.value === w.contractorId)?.millList || [];
     const id = w.millId || (millList.length === 1 ? millList[0]._id : null);
-    // Same fix as LedgerSheet's resolveMillName above — location, not name.
-    return millList.find((m) => m._id === id)?.location || "—";
+    return millList.find((m) => m._id === id)?.name || "—";
+  };
+  // Same resolution, for Payments (24 Sep, per Rishi: "add mill column in
+  // the payments too cause how will we know we paid which mill") — Payments
+  // now carry their own optional millId, same as Work Log entries do.
+  const paymentMillName = (p) => {
+    const millList = contractorOptions.find((o) => o.value === p.contractorId)?.millList || [];
+    const id = p.millId || (millList.length === 1 ? millList[0]._id : null);
+    return millList.find((m) => m._id === id)?.name || "—";
   };
 
   const handleExportWorkLogCsv = () => {
@@ -1225,6 +1230,7 @@ const LaborWages = () => {
       `${FILE_PREFIX}-payments-${todayStr()}.csv`,
       [
         { key: "contractor", label: "Contractor" },
+        { key: "mill", label: "Mill" },
         { key: "master", label: "Master" },
         { key: "date", label: "Date" },
         { key: "label", label: "Label" },
@@ -1232,6 +1238,7 @@ const LaborWages = () => {
       ],
       payments.map((p) => ({
         contractor: contractorName(p.contractorId),
+        mill: paymentMillName(p),
         master: contractorMaster(p.contractorId),
         date: p.date,
         label: p.label,
@@ -1269,7 +1276,7 @@ const LaborWages = () => {
         contractor: contractorName(p.contractorId),
         master: contractorMaster(p.contractorId),
         date: p.date,
-        details: p.label || "",
+        details: `${paymentMillName(p)} — ${p.label || "—"}`,
         amount: p.amount,
       })),
     ];
@@ -1334,9 +1341,11 @@ const LaborWages = () => {
   // several mills (22 Sep, multi-mill support — e.g. Jamir on Mill-11/12/13)
   // lists all of them instead of just one. 24 Sep, per Rishi ("remove mills
   // from the contractor's name, just show the location like KTPL 1, KTPL
-  // 2") — this used to also show the Mill's own `name` field, but that's
-  // where he'd been entering work-category words (Repso, Bundle, Core
-  // Loading, ...) rather than a real mill identifier, so it read as noise.
+  // 2") — this used to also fold the Mill's own `name` field in here (e.g.
+  // "Ramesh (Repso, KTPL I)"), which he found redundant on the CONTRACTOR
+  // label specifically; the Mill's `name` is still what the Mill column/
+  // picker itself shows elsewhere on this page (see resolveMillName etc.
+  // below) — only this one label was simplified to location-only.
   // `location` is deduped since two Mill rows can share one location.
   const contractorOptions = useMemo(() => {
     const millsById = new Map(mills.map((m) => [m._id, m]));
@@ -1419,7 +1428,7 @@ const LaborWages = () => {
             >
               <option value="">All mills</option>
               {mills.map((m) => (
-                <option key={m._id} value={m._id}>{m.location}</option>
+                <option key={m._id} value={m._id}>{m.name} ({m.location})</option>
               ))}
             </select>
           </div>
@@ -1670,6 +1679,7 @@ const LaborWages = () => {
                 // `.then(loadData)` reloading everything after each add.
                 addPayment({
                   contractorId: draft.contractorId,
+                  millId: draft.millId, // 24 Sep — which mill this payment was for, same as Work Log
                   date: draft.date,
                   label: draft.label,
                   amount: draft.amount,
@@ -1681,6 +1691,8 @@ const LaborWages = () => {
               search={search}
               allowedContractorIds={allowedContractorIds}
               sheetKey="payments"
+              millPicker
+              filterMillId={filterMill}
               filterDateFrom={filterDateFrom}
               filterDateTo={filterDateTo}
             />

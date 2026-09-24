@@ -65,7 +65,12 @@ const HEADERS = {
   // label is free text too ("CASH/ADV", "S&E", "RTGS", ...) rather than a
   // fixed set — the paper sheet uses several abbreviations sir didn't
   // define, and locking them to an enum risks guessing his terms wrong.
-  payments: ["id", "userId", "contractorId", "date", "label", "amount", "createdAt", "updatedAt", "customFields"],
+  //
+  // millId (24 Sep, per Rishi: "add mill column in the payments too cause
+  // how will we know we paid which mill") — same optional field/same
+  // reasoning as wageEntries.millId above: blank for a single-mill (or
+  // not-yet-assigned) contractor, only needed to disambiguate a multi-mill one.
+  payments: ["id", "userId", "contractorId", "millId", "date", "label", "amount", "createdAt", "updatedAt", "customFields"],
 };
 
 export const ensureMillsSheet = () => ensureSheetTab(SHEETS.mills, HEADERS.mills);
@@ -158,6 +163,7 @@ const toPayment = (row) => ({
   _id: row.id,
   id: row.id,
   contractorId: row.contractorId,
+  millId: row.millId || "",
   date: row.date || "",
   label: row.label || "",
   amount: num(row.amount),

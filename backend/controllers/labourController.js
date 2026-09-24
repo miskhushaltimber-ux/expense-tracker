@@ -206,7 +206,9 @@ const wageEntryHandlers = makeSimpleHandlers({
 });
 const paymentHandlers = makeSimpleHandlers({
   listByUser: listPaymentsByUser, create: createPayment, updateById: updatePaymentById, deleteById: deletePaymentById,
-  fields: ["contractorId", "date", "label", "amount", "customFields"], required: ["contractorId", "date"], label: "Payment",
+  // millId (24 Sep) — optional, which mill this payment was for, same as
+  // wageEntryHandlers' millId below.
+  fields: ["contractorId", "millId", "date", "label", "amount", "customFields"], required: ["contractorId", "date"], label: "Payment",
   labelFor: (p) => `${p.label || "Payment"} — ₹${p.amount || 0}`,
 });
 
