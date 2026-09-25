@@ -37,6 +37,18 @@ const DASHBOARD_TABS = [
   { key: "overview", label: "Overview" },
   { key: "vehicles", label: "Vehicles" },
   { key: "labor", label: "Labor Wages" },
+  // "All Sheets" (25 Sep, per Rishi: "what if i just want to view it and not
+  // export?") — the in-app equivalent of the split-tab Google Sheet export:
+  // same four categories, but just to look at, live, with nothing to paste
+  // or push anywhere.
+  { key: "allsheets", label: "All Sheets" },
+];
+
+const ALL_SHEETS_VIEWS = [
+  { key: "expenses", label: "Expenses" },
+  { key: "vehicles", label: "Vehicles" },
+  { key: "worklog", label: "Work Log" },
+  { key: "payments", label: "Payments" },
 ];
 
 // --- Palette -----------------------------------------------------------
@@ -194,6 +206,7 @@ const Home = () => {
   // sheet, and labor wages split sheet") — lives on the Dashboard, not any
   // one tab, since it spans all three.
   const [showExportAllModal, setShowExportAllModal] = useState(false);
+  const [allSheetsView, setAllSheetsView] = useState("expenses");
 
   // --- Filters (sir's item i: filters on everything, by master and by date) ---
   const [showFilters, setShowFilters] = useState(false);
@@ -450,6 +463,18 @@ const Home = () => {
 
   // --- Vehicles tab -------------------------------------------------------
   const vehicleExpenses = useMemo(() => expenses.filter((e) => e.vehicleId), [expenses]);
+
+  // --- All Sheets tab (25 Sep) --------------------------------------------
+  // Same 4-way split as the "Export Everything" Google Sheet, just rendered
+  // in-app instead of pushed anywhere — reuses the data already fetched for
+  // the charts above, so this costs no extra API calls.
+  // Note: like the "Export Everything" feature, the Expenses view below
+  // includes every expense (vehicle-tagged ones too) — the Vehicles view is
+  // that same data narrowed to just the vehicle-tagged rows, not a separate
+  // pool, so the two stay consistent with each other.
+  const vehiclesById = useMemo(() => new Map(vehicles.map((v) => [v._id, v])), [vehicles]);
+  const contractorsById = useMemo(() => new Map(laborContractors.map((c) => [c._id, c])), [laborContractors]);
+  const byDateDesc = (a, b, key = "date") => new Date(b[key] || 0) - new Date(a[key] || 0);
   const vehicleTotals = useMemo(() => {
     const totalSpend = vehicleExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     return { totalSpend, vehicleCount: vehicles.length, entryCount: vehicleExpenses.length };
@@ -1135,6 +1160,136 @@ const Home = () => {
             )}
           </>
         )
+      )}
+
+      {tab === "allsheets" && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+          <div className="flex flex-wrap gap-1 border-b border-gray-100 dark:border-gray-700 px-4 pt-3 pb-2">
+            {ALL_SHEETS_VIEWS.map((v) => (
+              <button
+                key={v.key}
+                onClick={() => setAllSheetsView(v.key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                  allSheetsView === v.key
+                    ? "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900"
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+            {allSheetsView === "expenses" && (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900 text-left text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Date</th>
+                    <th className="px-4 py-2 font-medium">Expense</th>
+                    <th className="px-4 py-2 font-medium">Master</th>
+                    <th className="px-4 py-2 font-medium text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {[...expenses].sort(byDateDesc).map((e) => (
+                    <tr key={e._id}>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{formatDate(e.date)}</td>
+                      <td className="px-4 py-2" style={{ color: INK.primary }}>{e.expense}</td>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{e.master || "—"}</td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={{ color: INK.primary }}>{formatCurrency(e.amount)}</td>
+                    </tr>
+                  ))}
+                  {expenses.length === 0 && (
+                    <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: INK.muted }}>No expenses yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+
+            {allSheetsView === "vehicles" && (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900 text-left text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Date</th>
+                    <th className="px-4 py-2 font-medium">Vehicle</th>
+                    <th className="px-4 py-2 font-medium">Expense</th>
+                    <th className="px-4 py-2 font-medium">Master</th>
+                    <th className="px-4 py-2 font-medium text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {[...vehicleExpenses].sort(byDateDesc).map((e) => (
+                    <tr key={e._id}>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{formatDate(e.date)}</td>
+                      <td className="px-4 py-2" style={{ color: INK.primary }}>{vehiclesById.get(e.vehicleId)?.name || "—"}</td>
+                      <td className="px-4 py-2" style={{ color: INK.primary }}>{e.expense}</td>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{e.master || "—"}</td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={{ color: INK.primary }}>{formatCurrency(e.amount)}</td>
+                    </tr>
+                  ))}
+                  {vehicleExpenses.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: INK.muted }}>No vehicle expenses yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+
+            {allSheetsView === "worklog" && (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900 text-left text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Contractor</th>
+                    <th className="px-4 py-2 font-medium">Period</th>
+                    <th className="px-4 py-2 font-medium text-right">CFT</th>
+                    <th className="px-4 py-2 font-medium text-right">Rate</th>
+                    <th className="px-4 py-2 font-medium text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {[...laborWages].sort((a, b) => byDateDesc(a, b, "createdAt")).map((w) => (
+                    <tr key={w._id}>
+                      <td className="px-4 py-2" style={{ color: INK.primary }}>{contractorsById.get(w.contractorId)?.name || "—"}</td>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{w.dateLabel || "—"}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-gray-500 dark:text-gray-400">{w.cft || 0}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-gray-500 dark:text-gray-400">{w.rate || 0}</td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={{ color: INK.primary }}>{formatCurrency(w.amount)}</td>
+                    </tr>
+                  ))}
+                  {laborWages.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: INK.muted }}>No work log entries yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+
+            {allSheetsView === "payments" && (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900 text-left text-gray-500 dark:text-gray-400">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Contractor</th>
+                    <th className="px-4 py-2 font-medium">Date</th>
+                    <th className="px-4 py-2 font-medium">Label</th>
+                    <th className="px-4 py-2 font-medium text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {[...laborPayments].sort(byDateDesc).map((p) => (
+                    <tr key={p._id}>
+                      <td className="px-4 py-2" style={{ color: INK.primary }}>{contractorsById.get(p.contractorId)?.name || "—"}</td>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{formatDate(p.date)}</td>
+                      <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{p.label || "—"}</td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={{ color: INK.primary }}>{formatCurrency(p.amount)}</td>
+                    </tr>
+                  ))}
+                  {laborPayments.length === 0 && (
+                    <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: INK.muted }}>No payments yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Vehicle drill-down drawer (22 Sep, per Rishi's notebook: the
