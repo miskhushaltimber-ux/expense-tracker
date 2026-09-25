@@ -671,11 +671,6 @@ const Home = () => {
 
       {tab === "overview" && (
         <>
-      {/* Left: everything the Overview tab already had (filters, stat tiles,
-          charts, recent entries) — "gross updates" in Rishi's words. Right:
-          the new Daily/Weekly reports sidebar below. */}
-      <div className="flex flex-col lg:flex-row gap-6 items-start">
-      <div className="flex-1 min-w-0">
       {/* Filters — one row above everything, applying to every card and chart */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <button
@@ -990,6 +985,119 @@ const Home = () => {
         </ChartCard>
       </div>
 
+      {/* Daily / Weekly entry reports — as charts AND as a written list, both
+          collapsible, sitting right above Recent Expenses (25 Sep, per
+          Rishi: "not in just in written form bro in charts too... put it
+          near recent expenses bar and also give them all collapsing
+          option"). Same dailyTotals/weeklyTotals data feeds both forms. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <ChartCard
+          title="Daily Entries"
+          subtitle="Last 7 days"
+          INK={INK}
+          collapsed={!!collapsedCharts.dailyChart}
+          onToggleCollapse={() => toggleChartCollapsed("dailyChart")}
+        >
+          <div className="p-4 h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={dailyTotals} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid stroke={INK.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: INK.muted }} axisLine={{ stroke: INK.axis }} tickLine={false} />
+                <YAxis
+                  tickFormatter={(v) => `₹${v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
+                  tick={{ fontSize: 12, fill: INK.muted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={52}
+                />
+                <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
+                <Bar dataKey="total" name="Spend" radius={[4, 4, 0, 0]} maxBarSize={44} fill={seriesColors[0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+
+        <ChartCard
+          title="Weekly Entries"
+          subtitle="Last 4 weeks (Mon–Sun)"
+          INK={INK}
+          collapsed={!!collapsedCharts.weeklyChart}
+          onToggleCollapse={() => toggleChartCollapsed("weeklyChart")}
+        >
+          <div className="p-4 h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={weeklyTotals} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid stroke={INK.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: INK.muted }} axisLine={{ stroke: INK.axis }} tickLine={false} />
+                <YAxis
+                  tickFormatter={(v) => `₹${v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
+                  tick={{ fontSize: 12, fill: INK.muted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={52}
+                />
+                <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
+                <Bar dataKey="total" name="Spend" radius={[4, 4, 0, 0]} maxBarSize={44} fill={seriesColors[1]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <ChartCard
+          title="Daily Updates"
+          subtitle="Last 7 days"
+          INK={INK}
+          collapsed={!!collapsedCharts.dailyList}
+          onToggleCollapse={() => toggleChartCollapsed("dailyList")}
+        >
+          <div className="divide-y divide-gray-100 dark:divide-gray-700">
+            {dailyTotals.map((day) => (
+              <div key={day.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
+                    {day.label}
+                  </p>
+                  <p className="text-xs" style={{ color: INK.muted }}>
+                    {day.count} {day.count === 1 ? "entry" : "entries"}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
+                  {formatCurrency(day.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </ChartCard>
+
+        <ChartCard
+          title="Weekly Updates"
+          subtitle="Last 4 weeks (Mon–Sun)"
+          INK={INK}
+          collapsed={!!collapsedCharts.weeklyList}
+          onToggleCollapse={() => toggleChartCollapsed("weeklyList")}
+        >
+          <div className="divide-y divide-gray-100 dark:divide-gray-700">
+            {weeklyTotals.map((week) => (
+              <div key={week.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
+                    {week.label}
+                  </p>
+                  <p className="text-xs" style={{ color: INK.muted }}>
+                    {week.count} {week.count === 1 ? "entry" : "entries"}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
+                  {formatCurrency(week.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </ChartCard>
+      </div>
+
       {/* Recent entries */}
       <Card className="mb-6">
         <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
@@ -1034,67 +1142,6 @@ const Home = () => {
           )}
         </div>
       </Card>
-      </div>
-
-      {/* Right: Daily / Weekly reports sidebar */}
-      <div className="w-full lg:w-80 shrink-0 space-y-6">
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-            <h2 className="font-semibold" style={{ color: INK.primary }}>
-              Daily Updates
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              Last 7 days
-            </p>
-          </div>
-          <div className="divide-y divide-gray-100 dark:divide-gray-700">
-            {dailyTotals.map((day) => (
-              <div key={day.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
-                    {day.label}
-                  </p>
-                  <p className="text-xs" style={{ color: INK.muted }}>
-                    {day.count} {day.count === 1 ? "entry" : "entries"}
-                  </p>
-                </div>
-                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
-                  {formatCurrency(day.total)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-            <h2 className="font-semibold" style={{ color: INK.primary }}>
-              Weekly Updates
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              Last 4 weeks (Mon–Sun)
-            </p>
-          </div>
-          <div className="divide-y divide-gray-100 dark:divide-gray-700">
-            {weeklyTotals.map((week) => (
-              <div key={week.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
-                    {week.label}
-                  </p>
-                  <p className="text-xs" style={{ color: INK.muted }}>
-                    {week.count} {week.count === 1 ? "entry" : "entries"}
-                  </p>
-                </div>
-                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
-                  {formatCurrency(week.total)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-      </div>
 
       {/* Drill-down drawer */}
       {drillMaster && (
