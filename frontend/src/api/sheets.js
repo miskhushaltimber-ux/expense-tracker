@@ -31,6 +31,20 @@ export const downloadExpenseSheetXlsx = async (scope) => {
   }
 };
 
+// Pushes Expenses, Vehicles, Work Log and Payments into ONE Google Sheet,
+// each as its own named tab (25 Sep, per Rishi: "one google sheet where
+// things are separated"). Unlike exportToGoogleSheet below, this needs no
+// scope/type — it always writes all four.
+export const exportAllToGoogleSheet = async (sheetUrl) => {
+  try {
+    const response = await apiClient.post(`${BASE_URL}/export-all`, { sheetUrl });
+    return response.data;
+  } catch (error) {
+    console.error("Error exporting everything to Google Sheet:", error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || "Failed to export to Google Sheet.");
+  }
+};
+
 // Whether the server has Google Sheets sync configured at all (a service
 // account key set) — lets the UI show a helpful message instead of a
 // confusing error when it isn't.

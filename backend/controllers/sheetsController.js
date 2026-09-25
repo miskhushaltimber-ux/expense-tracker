@@ -1,8 +1,9 @@
 import { listExpensesByUser } from "../models/expenseStore.js";
-import { isGoogleSheetsConfigured, exportExpensesToSheet, readSheetValues } from "../utils/googleSheets.js";
+import { isGoogleSheetsConfigured, exportExpensesToSheet, readSheetValues, exportAllToSheet as writeAllTabsToSheet } from "../utils/googleSheets.js";
 import { parseSheetValuesToPreview } from "../utils/importParser.js";
 import { resolveImportDestinations } from "../utils/importDestinations.js";
 import { listVehiclesByUser } from "../models/vehicleStore.js";
+import { listWageEntriesByUser, listPaymentsByUser, listContractorsByUser } from "../models/labourStore.js";
 import { buildExpensesWorkbook, expensesFileName } from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendExpenseSheetEmail } from "../utils/mailer.js";
 import { rowsToCsv } from "../utils/csv.js";
@@ -102,6 +103,41 @@ export const exportToSheet = async (req, res) => {
     res.json({ message: `Exported ${expenses.length} expense${expenses.length === 1 ? "" : "s"} to the Google Sheet`, count: expenses.length });
   } catch (error) {
     console.error("Error exporting to Google Sheet:", error.message);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// 25 Sep, per Rishi: "add a feature where we can see a whole google sheet
+// where things are separated like expense has split sheet, vehicle has
+// separate split sheet, and labor wages split sheet" — one paste-once Sheet
+// link, filled with FOUR tabs (Expenses, Vehicles, Work Log, Payments) in a
+// single action, instead of running the per-page "Push to Google Sheet"
+// three separate times (which, before today, would have overwritten the
+// same tab anyway — see googleSheets.js's writeRowsToSheet).
+export const exportAllToSheet = async (req, res) => {
+  const { sheetUrl } = req.body;
+  if (!sheetUrl || !sheetUrl.trim()) {
+    return res.status(400).json({ message: "Paste the Google Sheet's link or ID first" });
+  }
+
+  try {
+    const [allExpenses, wageEntries, payments, contractors] = await Promise.all([
+      listExpensesByUser(req.user.companyId),
+      listWageEntriesByUser(req.user.companyId),
+      listPaymentsByUser(req.user.companyId),
+      listContractorsByUser(req.user.companyId),
+    ]);
+    const expenses = [...allExpenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const vehicleExpenses = expenses.filter((e) => e.vehicleId);
+    const contractorsById = new Map(contractors.map((c) => [c._id, c]));
+
+    const counts = await writeAllTabsToSheet(sheetUrl, { expenses, vehicleExpenses, wageEntries, payments, contractorsById });
+    res.json({
+      message: `Exported everything to one Google Sheet — Expenses (${counts.expenses}), Vehicles (${counts.vehicles}), Work Log (${counts.workLog}), Payments (${counts.payments}), each on its own tab`,
+      counts,
+    });
+  } catch (error) {
+    console.error("Error exporting everything to Google Sheet:", error.message);
     res.status(400).json({ message: error.message });
   }
 };

@@ -38,6 +38,11 @@ const ExportSheetModal = ({
   // the dropdown is skipped entirely rather than offering a choice that
   // silently wouldn't change anything.
   emailFormats = ["xlsx", "csv"],
+  // sheetOnly (25 Sep, "export everything" flow) — that flow has no matching
+  // "email everything as one file" feature (yet), so there's nothing for an
+  // Email tab to do here; hides the mode switcher entirely and stays on
+  // "sheet" mode (pair with defaultMode="sheet" when using this).
+  sheetOnly = false,
 }) => {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState(defaultMode); // "email" | "sheet"
@@ -130,16 +135,18 @@ const ExportSheetModal = ({
           </div>
         )}
 
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => setMode("email")} className={tabClass(mode === "email")}>
-            Email it
-          </button>
-          <button onClick={() => setMode("sheet")} className={tabClass(mode === "sheet")}>
-            To a Google Sheet
-          </button>
-        </div>
+        {!sheetOnly && (
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setMode("email")} className={tabClass(mode === "email")}>
+              Email it
+            </button>
+            <button onClick={() => setMode("sheet")} className={tabClass(mode === "sheet")}>
+              To a Google Sheet
+            </button>
+          </div>
+        )}
 
-        {mode === "email" ? (
+        {mode === "email" && !sheetOnly ? (
           <>
             {status && status.emailConfigured === false && (
               <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">

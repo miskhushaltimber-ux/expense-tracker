@@ -22,7 +22,9 @@ import { useTheme } from "/src/context/ThemeContext";
 import { APP_NAME, APP_TAGLINE } from "/src/constants/brand";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
-import { FiFilter, FiXCircle, FiX, FiAlertTriangle, FiChevronUp, FiChevronDown } from "react-icons/fi";
+import { FiFilter, FiXCircle, FiX, FiAlertTriangle, FiChevronUp, FiChevronDown, FiGrid } from "react-icons/fi";
+import ExportSheetModal from "/src/components/ExportSheetModal";
+import { fetchSheetsStatus, exportAllToGoogleSheet } from "/src/api/sheets";
 
 // Dashboard tabs (18 Sep, per Rishi's correction: "i said pages in inside the
 // dashboard only just like what we did in labor page with work log, payments
@@ -186,6 +188,12 @@ const Home = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("overview");
+
+  // "Export Everything" (25 Sep, per Rishi: "one google sheet where things
+  // are separated like expense has split sheet, vehicle has separate split
+  // sheet, and labor wages split sheet") — lives on the Dashboard, not any
+  // one tab, since it spans all three.
+  const [showExportAllModal, setShowExportAllModal] = useState(false);
 
   // --- Filters (sir's item i: filters on everything, by master and by date) ---
   const [showFilters, setShowFilters] = useState(false);
@@ -515,14 +523,34 @@ const Home = () => {
 
   return (
     <div className="p-4 sm:p-6 lg:px-12 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold" style={{ color: INK.primary }}>
-          {APP_NAME}
-        </h1>
-        <p className="text-sm" style={{ color: INK.muted }}>
-          {APP_TAGLINE}
-        </p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: INK.primary }}>
+            {APP_NAME}
+          </h1>
+          <p className="text-sm" style={{ color: INK.muted }}>
+            {APP_TAGLINE}
+          </p>
+        </div>
+        <button
+          onClick={() => setShowExportAllModal(true)}
+          className="flex items-center gap-1.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 text-sm font-medium"
+        >
+          <FiGrid size={15} /> Export Everything to One Google Sheet
+        </button>
       </div>
+
+      {showExportAllModal && (
+        <ExportSheetModal
+          title="Export Everything"
+          onClose={() => setShowExportAllModal(false)}
+          fetchStatus={fetchSheetsStatus}
+          onExport={(sheetUrl) => exportAllToGoogleSheet(sheetUrl)}
+          sheetOnly
+          defaultMode="sheet"
+          sheetDescription="Paste a Google Sheet you own, shared with the app's service account as an Editor — it gets four tabs (Expenses, Vehicles, Work Log, Payments), each formatted and replaced with your current data. Safe to reuse the same Sheet every time; each tab is only ever overwritten, not duplicated."
+        />
+      )}
 
       <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 mb-6">
         {DASHBOARD_TABS.map((t) => (

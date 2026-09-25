@@ -45,12 +45,32 @@ const getFirstSheetId = async (client, spreadsheetId) => {
   return res.data.sheets?.[0]?.properties?.sheetId ?? 0;
 };
 
+// 25 Sep, per Rishi ("one google sheet where things are separated like
+// expense has split sheet, vehicle has separate split sheet, labor wages
+// split sheet") — every export above wrote to the SAME first tab of
+// whatever Sheet URL was pasted, so two exports into one Sheet just
+// overwrote each other; "combined" labour existed only as a workaround
+// (both ledgers jammed into that one tab with a Type column). This finds
+// (or creates) a NAMED tab in the target spreadsheet so several exports can
+// live side by side in one file — "Expenses", "Vehicles", "Work Log",
+// "Payments" as their own tabs, not four different Sheets to keep track of.
+const ensureTabId = async (client, spreadsheetId, tabName) => {
+  const res = await client.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
+  const existing = res.data.sheets?.find((s) => s.properties?.title === tabName);
+  if (existing) return existing.properties.sheetId;
+
+  const createRes = await client.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+  });
+  return createRes.data.replies?.[0]?.addSheet?.properties?.sheetId;
+};
+
 // Applied best-effort, after the raw values are already safely written —
 // a formatting hiccup (e.g. an odd sheet state) should never lose the export
 // itself, so this only ever logs and swallows its own errors.
-const formatSheetProfessionally = async (client, spreadsheetId, { numCols, numDataRows, currencyCols = [] }) => {
+const formatSheetProfessionally = async (client, spreadsheetId, { sheetId, numCols, numDataRows, currencyCols = [] }) => {
   try {
-    const sheetId = await getFirstSheetId(client, spreadsheetId);
     const border = { style: "SOLID", color: BORDER_GRAY };
     const lastRow = numDataRows + 1; // +1 for the header row, exclusive end index
 
@@ -130,22 +150,32 @@ const formatSheetProfessionally = async (client, spreadsheetId, { numCols, numDa
 };
 
 // Generic full-sheet writer, shared by exportExpensesToSheet and the Labor
-// Wages exporters below — overwrites the target sheet's first tab with the
-// given header + rows, then applies the styling above. A straightforward
-// full re-export rather than an incremental sync, so the Google Sheet always
-// mirrors exactly what's in the app.
-export const writeRowsToSheet = async (sheetIdOrUrl, header, rows, currencyCols = []) => {
+// Wages exporters below — overwrites the given tab (the sheet's first tab by
+// default, for every caller from before 25 Sep) with the given header +
+// rows, then applies the styling above. A straightforward full re-export
+// rather than an incremental sync, so the Google Sheet always mirrors
+// exactly what's in the app.
+//
+// tabName (25 Sep, "export everything as separate tabs in one Sheet") —
+// when given, writes/clears/formats that NAMED tab instead of always the
+// first one, creating it first if it doesn't exist yet (see ensureTabId
+// above). Left undefined, behaviour is byte-for-byte what it always was.
+export const writeRowsToSheet = async (sheetIdOrUrl, header, rows, currencyCols = [], tabName = null) => {
   const client = getSheetsClient();
   if (!client) {
     throw new Error("Google Sheets sync isn't configured on the server yet");
   }
   const spreadsheetId = extractSheetId(sheetIdOrUrl);
 
+  let sheetId;
   try {
-    await client.spreadsheets.values.clear({ spreadsheetId, range: "A1:Z100000" });
+    sheetId = tabName ? await ensureTabId(client, spreadsheetId, tabName) : await getFirstSheetId(client, spreadsheetId);
+    const range = tabName ? `'${tabName}'!A1:Z100000` : "A1:Z100000";
+    const writeRange = tabName ? `'${tabName}'!A1` : "A1";
+    await client.spreadsheets.values.clear({ spreadsheetId, range });
     await client.spreadsheets.values.update({
       spreadsheetId,
-      range: "A1",
+      range: writeRange,
       valueInputOption: "RAW",
       requestBody: { values: [header, ...rows] },
     });
@@ -156,10 +186,10 @@ export const writeRowsToSheet = async (sheetIdOrUrl, header, rows, currencyCols 
     );
   }
 
-  await formatSheetProfessionally(client, spreadsheetId, { numCols: header.length, numDataRows: rows.length, currencyCols });
+  await formatSheetProfessionally(client, spreadsheetId, { sheetId, numCols: header.length, numDataRows: rows.length, currencyCols });
 };
 
-export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
+export const exportExpensesToSheet = async (sheetIdOrUrl, expenses, tabName = null) => {
   const rows = expenses.map((e) => [
     new Date(e.date).toLocaleDateString("en-IN"),
     e.expense,
@@ -167,12 +197,12 @@ export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
     e.master,
     e.billFile || "",
   ]);
-  return writeRowsToSheet(sheetIdOrUrl, SHEET_HEADER, rows, [2]);
+  return writeRowsToSheet(sheetIdOrUrl, SHEET_HEADER, rows, [2], tabName);
 };
 
 // contractorsById maps a contractorId to its record, so the sheet shows the
 // contractor's name rather than a UUID.
-export const exportWorkLogToSheet = async (sheetIdOrUrl, wageEntries, contractorsById = new Map()) => {
+export const exportWorkLogToSheet = async (sheetIdOrUrl, wageEntries, contractorsById = new Map(), tabName = null) => {
   const rows = wageEntries.map((w) => [
     contractorsById.get(w.contractorId)?.name || "",
     w.dateLabel || "",
@@ -180,17 +210,38 @@ export const exportWorkLogToSheet = async (sheetIdOrUrl, wageEntries, contractor
     Number(w.rate) || 0,
     Number(w.amount) || 0,
   ]);
-  return writeRowsToSheet(sheetIdOrUrl, WORK_LOG_HEADER, rows, [3, 4]);
+  return writeRowsToSheet(sheetIdOrUrl, WORK_LOG_HEADER, rows, [3, 4], tabName);
 };
 
-export const exportPaymentsToSheet = async (sheetIdOrUrl, payments, contractorsById = new Map()) => {
+export const exportPaymentsToSheet = async (sheetIdOrUrl, payments, contractorsById = new Map(), tabName = null) => {
   const rows = payments.map((p) => [
     contractorsById.get(p.contractorId)?.name || "",
     p.date || "",
     p.label || "",
     Number(p.amount) || 0,
   ]);
-  return writeRowsToSheet(sheetIdOrUrl, PAYMENTS_HEADER, rows, [3]);
+  return writeRowsToSheet(sheetIdOrUrl, PAYMENTS_HEADER, rows, [3], tabName);
+};
+
+// 25 Sep, per Rishi: "one google sheet where things are separated" — pushes
+// Expenses, Vehicles (vehicle-tagged expenses), Work Log and Payments each
+// into their OWN tab of the SAME spreadsheet, one action instead of pasting
+// the same Sheet link into four separate "Push to Google Sheet" buttons
+// (which used to clobber each other anyway, see writeRowsToSheet above).
+// Sequential, not Promise.all — two tabs being created at once against the
+// same spreadsheet is exactly the kind of race ensureTabId shouldn't have
+// to handle.
+export const exportAllToSheet = async (sheetIdOrUrl, { expenses, vehicleExpenses, wageEntries, payments, contractorsById }) => {
+  await exportExpensesToSheet(sheetIdOrUrl, expenses, "Expenses");
+  await exportExpensesToSheet(sheetIdOrUrl, vehicleExpenses, "Vehicles");
+  await exportWorkLogToSheet(sheetIdOrUrl, wageEntries, contractorsById, "Work Log");
+  await exportPaymentsToSheet(sheetIdOrUrl, payments, contractorsById, "Payments");
+  return {
+    expenses: expenses.length,
+    vehicles: vehicleExpenses.length,
+    workLog: wageEntries.length,
+    payments: payments.length,
+  };
 };
 
 // 23 Sep, per Rishi: "when i share... using combined switch it just prints
