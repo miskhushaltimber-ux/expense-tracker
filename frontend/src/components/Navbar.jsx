@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Menu, PieChart, Database, FolderOpen, Settings, Users } from "lucide-react";
+import { Menu, PieChart, Database, FolderOpen, Settings, Users, Grid } from "lucide-react";
+import { toast } from "react-toastify";
 import { APP_NAME } from "../constants/brand";
 import { useAuth } from "../context/AuthContext";
 import { prefetchHome, prefetchManageData, prefetchDocuments, prefetchTeam } from "../utils/routePrefetch";
+import { fetchSettings, updateLinkedSheet } from "../api/settings";
 
 // The top-right corner sat empty since this navbar was first built — this
 // hamburger opened a single page (Manage Data) for a while. 18 Sep, per
@@ -29,6 +31,39 @@ const Navbar = ({ onMenuClick }) => {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
+
+  // Linked Google Sheet (25 Sep, per Rishi: "add a link google sheet bar in
+  // the settings menu where we just link one sheet in it") — every new
+  // Expense/Vehicle/Work Log/Payment entry auto-syncs here from then on (see
+  // backend/utils/sheetSync.js). Owner-only, same as Team & Activity above.
+  // Fetched once on mount rather than per dropdown-open — it's one cheap GET
+  // and the value rarely changes.
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [savedSheetUrl, setSavedSheetUrl] = useState("");
+  const [savingSheet, setSavingSheet] = useState(false);
+
+  useEffect(() => {
+    if (!isOwner) return;
+    fetchSettings().then((s) => {
+      setSheetUrl(s.linkedSheetUrl || "");
+      setSavedSheetUrl(s.linkedSheetUrl || "");
+    });
+  }, [isOwner]);
+
+  const handleSaveSheet = async () => {
+    if (savingSheet) return;
+    setSavingSheet(true);
+    try {
+      const result = await updateLinkedSheet(sheetUrl.trim());
+      setSavedSheetUrl(result.linkedSheetUrl || "");
+      setSheetUrl(result.linkedSheetUrl || "");
+      toast.success(result.message || "Saved");
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingSheet(false);
+    }
+  };
 
   return (
     <nav className="bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700 px-3 sm:px-6 py-3">
@@ -104,6 +139,46 @@ const Navbar = ({ onMenuClick }) => {
                   <Users size={17} className="mr-3 shrink-0" />
                   Team &amp; Activity
                 </Link>
+              )}
+              {isOwner && (
+                <div className="border-t border-gray-100 dark:border-gray-700 mt-1 pt-3 px-4 pb-3">
+                  <p className="flex items-center text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+                    <Grid size={14} className="mr-1.5 shrink-0" /> Linked Google Sheet
+                  </p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-2 leading-snug">
+                    Every new entry syncs here automatically. Share it with the service account as an Editor first.
+                  </p>
+                  <input
+                    type="text"
+                    value={sheetUrl}
+                    onChange={(e) => setSheetUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSaveSheet()}
+                    placeholder="Paste a Google Sheet link..."
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 px-2.5 py-1.5 rounded-md text-xs mb-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleSaveSheet}
+                      disabled={savingSheet || sheetUrl.trim() === savedSheetUrl.trim()}
+                      className="flex-1 bg-blue-600 text-white text-xs font-medium py-1.5 rounded-md hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {savingSheet ? "Saving..." : "Save"}
+                    </button>
+                    {savedSheetUrl && (
+                      <button
+                        onClick={() => setSheetUrl("")}
+                        disabled={savingSheet}
+                        className="text-xs text-gray-400 hover:text-red-500 px-1"
+                        title="Clear the field (still need to Save to unlink)"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] mt-1.5" style={{ color: savedSheetUrl ? "#16a34a" : "#9ca3af" }}>
+                    {savedSheetUrl ? "Linked — auto-syncing" : "Not linked"}
+                  </p>
+                </div>
               )}
             </div>
           )}

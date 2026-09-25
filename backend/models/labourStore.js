@@ -19,6 +19,7 @@
 import crypto from "crypto";
 import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, updateRowsAt, deleteRowAt, deleteRowsAt } from "../utils/firestoreDb.js";
 import { parseCustomFields } from "../utils/customFields.js";
+import { syncLinkedSheet } from "../utils/sheetSync.js";
 
 const SHEETS = {
   mills: "Mills",
@@ -177,10 +178,19 @@ const toPayment = (row) => ({
 // list/create/update/delete behaviour, scoped and ownership-checked by
 // userId. Callers pass whatever extra fields their entity needs (millId,
 // cft, label, ...) — nothing here is hardcoded to any one shape.
-const makeStore = (sheetKey, toEntity) => {
+//
+// syncKind (25 Sep, "link a sheet where every new entry updates itself
+// automatically") — optional; only wageEntries ("worklog") and payments
+// ("payments") pass one, since those are the two ledgers that have their own
+// tab in a linked Sheet. Left undefined for mills/contractors/labor, which
+// have nothing of their own to sync.
+const makeStore = (sheetKey, toEntity, syncKind = null) => {
   const SHEET = SHEETS[sheetKey];
   const cols = HEADERS[sheetKey];
   const dataFields = cols.filter((h) => !["id", "userId", "createdAt", "updatedAt"].includes(h));
+  const notifySync = (userId) => {
+    if (syncKind) syncLinkedSheet(userId, syncKind); // fire-and-forget — see utils/sheetSync.js
+  };
 
   const listByUser = async (userId) => {
     const rows = await getAllRows(SHEET, cols);
@@ -197,6 +207,7 @@ const makeStore = (sheetKey, toEntity) => {
       ...Object.fromEntries(dataFields.map((f) => [f, fields[f] ?? ""])),
     };
     await appendRow(SHEET, cols, row);
+    notifySync(row.userId);
     return toEntity(row);
   };
 
@@ -213,6 +224,7 @@ const makeStore = (sheetKey, toEntity) => {
       ...Object.fromEntries(dataFields.map((f) => [f, fields[f] ?? ""])),
     }));
     await appendRows(SHEET, cols, prepared);
+    notifySync(userId);
     return prepared.map(toEntity);
   };
 
@@ -229,6 +241,7 @@ const makeStore = (sheetKey, toEntity) => {
     if (error) return { error };
     const merged = { ...row, ...updates, updatedAt: new Date().toISOString() };
     await updateRowAt(SHEET, cols, row._row, merged);
+    notifySync(userId);
     return { entity: toEntity(merged) };
   };
 
@@ -236,6 +249,7 @@ const makeStore = (sheetKey, toEntity) => {
     const { row, error } = await findOwnedRow(id, userId);
     if (error) return { error };
     await deleteRowAt(SHEET, row._row);
+    notifySync(userId);
     return { entity: toEntity(row) };
   };
 
@@ -259,6 +273,7 @@ const makeStore = (sheetKey, toEntity) => {
 
     if (mine.length) {
       await deleteRowsAt(SHEET, mine.map((r) => r._row));
+      notifySync(userId);
     }
 
     return { deleted: mine.map(toEntity), notFound, forbidden };
@@ -275,8 +290,8 @@ const alpha = (list) => [...list].sort((a, b) => (a.name || "").localeCompare(b.
 const millStore = makeStore("mills", toMill);
 const contractorStore = makeStore("contractors", toContractor);
 const laborStore = makeStore("labors", toLabor);
-const wageEntryStore = makeStore("wageEntries", toWageEntry);
-const paymentStore = makeStore("payments", toPayment);
+const wageEntryStore = makeStore("wageEntries", toWageEntry, "worklog");
+const paymentStore = makeStore("payments", toPayment, "payments");
 
 export const listMillsByUser = (userId) => millStore.listByUser(userId).then(alpha);
 export const createMill = millStore.create;
@@ -362,6 +377,11 @@ export const mergeContractors = async (userId, primaryId, duplicateIds) => {
   };
   const movedWageEntries = await moveContractorId("wageEntries");
   const movedPayments = await moveContractorId("payments");
+  // Contractor names shown in a linked Sheet's Work Log/Payments tabs would
+  // otherwise go stale after a merge, same reasoning as every other mutation
+  // above — see utils/sheetSync.js.
+  if (movedWageEntries) syncLinkedSheet(userId, "worklog");
+  if (movedPayments) syncLinkedSheet(userId, "payments");
 
   await deleteRowsAt(SHEETS.contractors, dupRows.map((r) => r._row));
 

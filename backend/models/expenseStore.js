@@ -14,6 +14,7 @@ import {
   deleteRowsAt,
 } from "../utils/firestoreDb.js";
 import { parseCustomFields, serializeCustomFields } from "../utils/customFields.js";
+import { syncLinkedSheet } from "../utils/sheetSync.js";
 
 const SHEET_NAME = "Expenses";
 const HEADERS = [
@@ -83,6 +84,7 @@ export const createExpense = async ({ userId, date, expense, amount, master, bil
     customFields: serializeCustomFields(customFields),
   };
   await appendRow(SHEET_NAME, HEADERS, row);
+  syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
   return toExpense(row);
 };
 
@@ -109,6 +111,7 @@ export const bulkCreateExpenses = async (userId, rows) => {
     customFields: serializeCustomFields(r.customFields),
   }));
   await appendRows(SHEET_NAME, HEADERS, prepared);
+  syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
   return prepared.map(toExpense);
 };
 
@@ -137,6 +140,7 @@ export const updateExpenseById = async (id, userId, updates) => {
     merged.customFields = serializeCustomFields({ ...parseCustomFields(row.customFields), ...updates.customFields });
   }
   await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
+  syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
   return { expense: toExpense(merged) };
 };
 
@@ -144,6 +148,7 @@ export const deleteExpenseById = async (id, userId) => {
   const { row, error } = await findOwnedRow(id, userId);
   if (error) return { error };
   await deleteRowAt(SHEET_NAME, row._row);
+  syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
   return { expense: toExpense(row) };
 };
 
@@ -159,7 +164,10 @@ export const renameMasterOnExpenses = async (userId, oldName, newName) => {
     .filter((r) => r.userId === userId && (r.master || "").trim().toLowerCase() === wanted)
     .map((r) => ({ rowNumber: r._row, rowObject: { ...r, master: newName, updatedAt: now } }));
 
-  if (updates.length) await updateRowsAt(SHEET_NAME, HEADERS, updates);
+  if (updates.length) {
+    await updateRowsAt(SHEET_NAME, HEADERS, updates);
+    syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
+  }
   return updates.length;
 };
 
@@ -194,6 +202,7 @@ export const deleteExpensesByIds = async (ids, userId) => {
       SHEET_NAME,
       mine.map((r) => r._row)
     );
+    syncLinkedSheet(userId, "expenses"); // fire-and-forget — see sheetSync.js
   }
 
   return { deleted: mine.map(toExpense), notFound, forbidden };
