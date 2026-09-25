@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Navigate } from "react-router-dom";
 import { fetchExpenses } from "/src/api/expenses";
 import { fetchVehicles } from "/src/api/vehicles";
 import { fetchContractors, fetchWageEntries, fetchPayments } from "/src/api/labour";
@@ -513,6 +514,18 @@ const Home = () => {
       }))
       .filter((c) => c.earned > 0 || c.paid > 0);
   }, [laborContractors, laborWages, laborPayments]);
+
+  // Staff-only accounts have no use for analytics — they enter data, they
+  // don't review it (25 Sep, per Rishi: "what is the point to show dashboard
+  // data to the staff? staff only enters data and nothing else"). Bounced to
+  // their actual work (Expense Sheet) before any of the dashboard's several
+  // fetches even fire. Same pattern as Team.jsx's owner-only redirect — the
+  // real boundary would need to be a backend one too if this data were ever
+  // sensitive, but nothing here is per-user secret, so a client-side redirect
+  // is enough to keep staff out of a page that isn't for them.
+  if (user && user.role !== "owner") {
+    return <Navigate to="/dashboard/expenses" replace />;
+  }
 
   if (loading) {
     return (

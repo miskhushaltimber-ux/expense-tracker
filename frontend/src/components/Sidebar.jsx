@@ -22,8 +22,9 @@ import {
 //
 // prefetch: warms that page's lazy-loaded JS chunk on hover, before the
 // click — see utils/routePrefetch.js for why.
-const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true, prefetch: prefetchHome },
+const DASHBOARD_ITEM = { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true, prefetch: prefetchHome };
+
+const DATA_ENTRY_ITEMS = [
   { to: '/dashboard/expenses', label: 'Expense Sheet', icon: Sheet, prefetch: prefetchExpenses },
   { to: '/dashboard/vehicles', label: 'Vehicles', icon: Truck, prefetch: prefetchVehicles },
   { to: '/dashboard/labor-wages', label: 'Labor Wages', icon: HardHat, prefetch: prefetchLaborWages },
@@ -38,6 +39,12 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
   const location = useLocation();
 
   const isActive = (path, end) => (end ? location.pathname === path : location.pathname.startsWith(path));
+
+  // Staff only enter data — the Dashboard is analytics/review, which is an
+  // owner concern (25 Sep, per Rishi: "staff only enters data and nothing
+  // else"). Home.jsx bounces a staff login that lands there directly, but
+  // there's no reason to even show them the link.
+  const navItems = user?.role === 'owner' ? [DASHBOARD_ITEM, ...DATA_ENTRY_ITEMS] : DATA_ENTRY_ITEMS;
 
   return (
     <>
@@ -88,7 +95,7 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
 
             {/* Navigation Links */}
             <nav className="flex-1 px-3 sm:px-4 py-4 space-y-1 overflow-y-auto">
-              {NAV_ITEMS.map(({ to, label, icon: Icon, end, prefetch }) => (
+              {navItems.map(({ to, label, icon: Icon, end, prefetch }) => (
                 <Link
                   key={to}
                   to={to}

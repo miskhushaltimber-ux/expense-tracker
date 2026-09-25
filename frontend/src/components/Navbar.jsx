@@ -4,7 +4,7 @@ import { Menu, PieChart, Database, FolderOpen, Settings, Users, Grid } from "luc
 import { toast } from "react-toastify";
 import { APP_NAME } from "../constants/brand";
 import { useAuth } from "../context/AuthContext";
-import { prefetchHome, prefetchManageData, prefetchDocuments, prefetchTeam } from "../utils/routePrefetch";
+import { prefetchHome, prefetchExpenses, prefetchManageData, prefetchDocuments, prefetchTeam } from "../utils/routePrefetch";
 import { fetchSettings, updateLinkedSheet } from "../api/settings";
 
 // The top-right corner sat empty since this navbar was first built — this
@@ -77,10 +77,10 @@ const Navbar = ({ onMenuClick }) => {
             <Menu size={22} />
           </button>
           <Link
-            to="/dashboard"
-            onMouseEnter={prefetchHome}
-            onFocus={prefetchHome}
-            onTouchStart={prefetchHome}
+            to={isOwner ? "/dashboard" : "/dashboard/expenses"}
+            onMouseEnter={isOwner ? prefetchHome : prefetchExpenses}
+            onFocus={isOwner ? prefetchHome : prefetchExpenses}
+            onTouchStart={isOwner ? prefetchHome : prefetchExpenses}
             className="flex items-center min-w-0 text-blue-600 dark:text-blue-400 font-bold text-base sm:text-xl tracking-wide hover:text-blue-800 dark:hover:text-blue-300 transition-all"
           >
             <PieChart className="h-5 w-5 sm:h-6 sm:w-6 mr-2 shrink-0" />
