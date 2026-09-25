@@ -91,6 +91,7 @@ const formatCurrency = (amount) =>
 
 const formatDate = (d) => (d ? new Date(d).toLocaleDateString("en-IN") : "No date");
 const monthKey = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
 const Card = ({ children, className = "" }) => (
   <div className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm ${className}`}>{children}</div>
@@ -462,6 +463,68 @@ const Home = () => {
 
   const recentExpenses = useMemo(() => filtered.slice(0, 8), [filtered]);
 
+  // --- Daily / weekly entry reports (25 Sep, per Rishi: "on the left side
+  // add individual reporting of daily data entry updates and weekly reports
+  // ... on left we see all gross updates and on right we see daily and
+  // weekly reports") — a small sidebar next to the Overview tab's existing
+  // charts, showing totals only (no per-person breakdown, per his answer)
+  // for the last 7 days and the last 4 calendar weeks. Built off `filtered`
+  // like everything else on this tab, so it respects the active filters.
+  const dailyTotals = useMemo(() => {
+    const days = 7;
+    const today = new Date();
+    const buckets = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      buckets.push({
+        key: dayKey(d),
+        label: d.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" }),
+        total: 0,
+        count: 0,
+      });
+    }
+    const byKey = new Map(buckets.map((b) => [b.key, b]));
+    for (const e of filtered) {
+      if (!e.date) continue;
+      const bucket = byKey.get(dayKey(new Date(e.date)));
+      if (bucket) {
+        bucket.total += Number(e.amount) || 0;
+        bucket.count += 1;
+      }
+    }
+    return buckets.reverse(); // most recent first
+  }, [filtered]);
+
+  const weeklyTotals = useMemo(() => {
+    const weeks = 4;
+    const today = new Date();
+    const daysSinceMonday = (today.getDay() + 6) % 7; // Mon=0 ... Sun=6
+    const thisMonday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysSinceMonday);
+    const buckets = [];
+    for (let i = weeks - 1; i >= 0; i--) {
+      const start = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() - i * 7);
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+      buckets.push({
+        key: dayKey(start),
+        label: `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} – ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
+        start,
+        end,
+        total: 0,
+        count: 0,
+      });
+    }
+    for (const e of filtered) {
+      if (!e.date) continue;
+      const d = new Date(e.date);
+      const bucket = buckets.find((b) => d >= b.start && d <= new Date(b.end.getFullYear(), b.end.getMonth(), b.end.getDate(), 23, 59, 59));
+      if (bucket) {
+        bucket.total += Number(e.amount) || 0;
+        bucket.count += 1;
+      }
+    }
+    return buckets.reverse(); // most recent first
+  }, [filtered]);
+
   // --- Vehicles tab -------------------------------------------------------
   const vehicleExpenses = useMemo(() => expenses.filter((e) => e.vehicleId), [expenses]);
 
@@ -608,6 +671,11 @@ const Home = () => {
 
       {tab === "overview" && (
         <>
+      {/* Left: everything the Overview tab already had (filters, stat tiles,
+          charts, recent entries) — "gross updates" in Rishi's words. Right:
+          the new Daily/Weekly reports sidebar below. */}
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+      <div className="flex-1 min-w-0">
       {/* Filters — one row above everything, applying to every card and chart */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <button
@@ -966,6 +1034,67 @@ const Home = () => {
           )}
         </div>
       </Card>
+      </div>
+
+      {/* Right: Daily / Weekly reports sidebar */}
+      <div className="w-full lg:w-80 shrink-0 space-y-6">
+        <Card>
+          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
+            <h2 className="font-semibold" style={{ color: INK.primary }}>
+              Daily Updates
+            </h2>
+            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
+              Last 7 days
+            </p>
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-gray-700">
+            {dailyTotals.map((day) => (
+              <div key={day.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
+                    {day.label}
+                  </p>
+                  <p className="text-xs" style={{ color: INK.muted }}>
+                    {day.count} {day.count === 1 ? "entry" : "entries"}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
+                  {formatCurrency(day.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
+            <h2 className="font-semibold" style={{ color: INK.primary }}>
+              Weekly Updates
+            </h2>
+            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
+              Last 4 weeks (Mon–Sun)
+            </p>
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-gray-700">
+            {weeklyTotals.map((week) => (
+              <div key={week.key} className="px-5 py-2.5 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: INK.primary }}>
+                    {week.label}
+                  </p>
+                  <p className="text-xs" style={{ color: INK.muted }}>
+                    {week.count} {week.count === 1 ? "entry" : "entries"}
+                  </p>
+                </div>
+                <span className="text-sm font-semibold shrink-0 tabular-nums" style={{ color: INK.primary }}>
+                  {formatCurrency(week.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      </div>
 
       {/* Drill-down drawer */}
       {drillMaster && (
