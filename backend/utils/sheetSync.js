@@ -22,6 +22,19 @@ import { listExpensesByUser } from "../models/expenseStore.js";
 import { listWageEntriesByUser, listPaymentsByUser, listContractorsByUser } from "../models/labourStore.js";
 import { exportExpensesToSheet, exportWorkLogToSheet, exportPaymentsToSheet } from "./googleSheets.js";
 
+// wageEntries carry dateLabel ("DD-MM-YYYY" or "DD-MM-YYYY TO DD-MM-YYYY",
+// see LaborWages.jsx's combineDateRange) rather than a real date field —
+// this pulls a sortable timestamp out of the first date in that string.
+// Unparseable/missing dates sort to the very end rather than the very
+// start, so one bad row can't shove itself above everything else.
+const parseWorkLogDate = (w) => {
+  const first = String(w.dateLabel || "").split(" TO ")[0].trim();
+  const [d, m, y] = first.split("-");
+  if (!d || !m || !y) return Infinity;
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return isNaN(dt.getTime()) ? Infinity : dt.getTime();
+};
+
 // The real work, split out from syncLinkedSheet below so
 // settingsController.js's "link this Sheet" action can await it directly and
 // let a bad/unshared link surface as a real error immediately, instead of
@@ -41,10 +54,18 @@ export const pushToLinkedSheet = async (companyId, kind) => {
     await exportExpensesToSheet(sheetUrl, all.filter((e) => e.vehicleId), "Vehicles");
   } else if (kind === "worklog") {
     const [wageEntries, contractors] = await Promise.all([listWageEntriesByUser(companyId), listContractorsByUser(companyId)]);
-    await exportWorkLogToSheet(sheetUrl, wageEntries, new Map(contractors.map((c) => [c._id, c])), "Work Log");
+    // 25 Sep, per Rishi: "it adds up in the sheets down below but it is not
+    // organised" — this tab used to get written in whatever order the store
+    // returned rows (creation order), same gap the Expenses tab above
+    // already avoided. Sorted by each entry's own date now, oldest first,
+    // so this week's rows land together instead of wherever they happened
+    // to be typed in.
+    const sorted = [...wageEntries].sort((a, b) => parseWorkLogDate(a) - parseWorkLogDate(b));
+    await exportWorkLogToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), "Work Log");
   } else if (kind === "payments") {
     const [payments, contractors] = await Promise.all([listPaymentsByUser(companyId), listContractorsByUser(companyId)]);
-    await exportPaymentsToSheet(sheetUrl, payments, new Map(contractors.map((c) => [c._id, c])), "Payments");
+    const sorted = [...payments].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+    await exportPaymentsToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), "Payments");
   }
   return true;
 };

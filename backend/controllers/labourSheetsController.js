@@ -27,6 +27,24 @@ const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value
 
 const resolveType = (value) => (value === "payments" ? "payments" : value === "combined" ? "combined" : "worklog");
 
+// 25 Sep, per Rishi: "it adds up in the sheets down below but it is not
+// organised... this weeks payments should be in this week and before that
+// should be in that date, same rule for work log" — the Payments branches
+// below already sorted by date before this; Work Log (and the "combined"
+// branches, which carry both) never did, so a Work Log tab/export stayed in
+// creation order no matter when the entry's actual date was.
+// wageEntries carry dateLabel ("DD-MM-YYYY" or "DD-MM-YYYY TO DD-MM-YYYY",
+// see LaborWages.jsx's combineDateRange) rather than a real date field.
+const parseWorkLogDate = (w) => {
+  const first = String(w.dateLabel || "").split(" TO ")[0].trim();
+  const [d, m, y] = first.split("-");
+  if (!d || !m || !y) return Infinity; // unparseable — sinks to the bottom, not the top
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return isNaN(dt.getTime()) ? Infinity : dt.getTime();
+};
+const sortWageEntries = (list) => [...list].sort((a, b) => parseWorkLogDate(a) - parseWorkLogDate(b));
+const sortPayments = (list) => [...list].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+
 export const exportLabourToSheet = async (req, res) => {
   const { sheetUrl, type: rawType } = req.body;
   const type = resolveType(rawType);
@@ -48,18 +66,18 @@ export const exportLabourToSheet = async (req, res) => {
         listWageEntriesByUser(req.user.companyId),
         listPaymentsByUser(req.user.companyId),
       ]);
-      await exportCombinedLabourToSheet(sheetUrl, wageEntries, payments, contractorsById);
+      await exportCombinedLabourToSheet(sheetUrl, sortWageEntries(wageEntries), sortPayments(payments), contractorsById);
       const total = wageEntries.length + payments.length;
       return res.json({ message: `Exported ${wageEntries.length} work log entries + ${payments.length} payments (${total} rows) to the Google Sheet`, count: total });
     }
 
     if (type === "payments") {
-      const payments = (await listPaymentsByUser(req.user.companyId)).sort((a, b) => new Date(a.date) - new Date(b.date));
+      const payments = sortPayments(await listPaymentsByUser(req.user.companyId));
       await exportPaymentsToSheet(sheetUrl, payments, contractorsById);
       return res.json({ message: `Exported ${payments.length} payment${payments.length === 1 ? "" : "s"} to the Google Sheet`, count: payments.length });
     }
 
-    const wageEntries = await listWageEntriesByUser(req.user.companyId);
+    const wageEntries = sortWageEntries(await listWageEntriesByUser(req.user.companyId));
     await exportWorkLogToSheet(sheetUrl, wageEntries, contractorsById);
     res.json({ message: `Exported ${wageEntries.length} entr${wageEntries.length === 1 ? "y" : "ies"} to the Google Sheet`, count: wageEntries.length });
   } catch (error) {
@@ -92,14 +110,16 @@ export const emailLabourSheet = async (req, res) => {
         listWageEntriesByUser(req.user.companyId),
         listPaymentsByUser(req.user.companyId),
       ]);
+      wageEntries = sortWageEntries(wageEntries);
+      payments = sortPayments(payments);
       if (wageEntries.length === 0 && payments.length === 0) {
         return res.status(400).json({ message: "There are no work log entries or payments to send yet" });
       }
     } else if (type === "payments") {
-      payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
+      payments = sortPayments(await listPaymentsByUser(req.user.companyId));
       if (payments.length === 0) return res.status(400).json({ message: "There are no payments to send yet" });
     } else {
-      wageEntries = await listWageEntriesByUser(req.user.companyId);
+      wageEntries = sortWageEntries(await listWageEntriesByUser(req.user.companyId));
       if (wageEntries.length === 0) return res.status(400).json({ message: "There are no work log entries to send yet" });
     }
 
@@ -185,12 +205,12 @@ export const downloadLabourSheet = async (req, res) => {
         listWageEntriesByUser(req.user.companyId),
         listPaymentsByUser(req.user.companyId),
       ]);
-      buffer = await buildCombinedLabourWorkbook(wageEntries, payments, contractorsById);
+      buffer = await buildCombinedLabourWorkbook(sortWageEntries(wageEntries), sortPayments(payments), contractorsById);
     } else if (type === "payments") {
-      const payments = [...(await listPaymentsByUser(req.user.companyId))].sort((a, b) => new Date(a.date) - new Date(b.date));
+      const payments = sortPayments(await listPaymentsByUser(req.user.companyId));
       buffer = await buildPaymentsWorkbook(payments, contractorsById);
     } else {
-      const wageEntries = await listWageEntriesByUser(req.user.companyId);
+      const wageEntries = sortWageEntries(await listWageEntriesByUser(req.user.companyId));
       buffer = await buildWorkLogWorkbook(wageEntries, contractorsById);
     }
 

@@ -432,20 +432,38 @@ const LedgerSheet = ({
   // filter, or contractor scope actually change.
   const filtered = useMemo(
     () =>
-      rows.filter((r) => {
-        if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
-        if (filterMillId && resolveMillId(r) !== filterMillId) return false;
-        if (filterDateFrom || filterDateTo) {
-          const d = parseRowDate(r);
-          if (!d) return false;
-          if (filterDateFrom && d < new Date(filterDateFrom)) return false;
-          if (filterDateTo && d > new Date(`${filterDateTo}T23:59:59`)) return false;
-        }
-        if (!search) return true;
-        const c = contractorById.get(r.contractorId);
-        const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
-        return haystack.includes(search.toLowerCase());
-      }),
+      rows
+        .filter((r) => {
+          if (allowedContractorIds && !allowedContractorIds.has(r.contractorId)) return false;
+          if (filterMillId && resolveMillId(r) !== filterMillId) return false;
+          if (filterDateFrom || filterDateTo) {
+            const d = parseRowDate(r);
+            if (!d) return false;
+            if (filterDateFrom && d < new Date(filterDateFrom)) return false;
+            if (filterDateTo && d > new Date(`${filterDateTo}T23:59:59`)) return false;
+          }
+          if (!search) return true;
+          const c = contractorById.get(r.contractorId);
+          const haystack = `${c?.label || ""} ${c?.master || ""} ${r.date || ""} ${r.label || ""} ${r.dateLabel || ""}`.toLowerCase();
+          return haystack.includes(search.toLowerCase());
+        })
+        // 25 Sep, per Rishi: "it adds up in the sheets down below but it is
+        // not organised it gets anywhere... this weeks payments should be in
+        // this week and before that should be in that date" — rows used to
+        // stay in whatever order they were typed in (today's entry for a
+        // week-old job would land at the top, mixed in with everything
+        // else). Sorted by the row's actual date now, newest first, so this
+        // week's entries sit together above last week's regardless of when
+        // each was typed. A row with no parseable date sinks to the bottom
+        // instead of breaking the sort.
+        .sort((a, b) => {
+          const da = parseRowDate(a);
+          const db = parseRowDate(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return db - da;
+        }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, allowedContractorIds, filterMillId, filterDateFrom, filterDateTo, search, contractorById]
   );
@@ -642,7 +660,12 @@ const LedgerSheet = ({
                   )}
                 </td>
               )}
-              <td className="px-3 py-2" colSpan={dateCols}>{row.date || row.dateLabel}</td>
+              {/* row.date is a raw <input type="date"> value ("YYYY-MM-DD") —
+                  Payments used to show that straight through, which read as
+                  US-style to Rishi (25 Sep: "payments date is not according
+                  to indian region format"). ddmmyyyy matches what Work Log's
+                  own dateLabel has looked like all along. */}
+              <td className="px-3 py-2" colSpan={dateCols}>{row.date ? ddmmyyyy(row.date) : row.dateLabel}</td>
               <td className="px-3 py-2">{c?.label || "—"}</td>
               {millPicker && <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{resolveMillName(row)}</td>}
               <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c?.master || "—"}</td>
@@ -1245,6 +1268,14 @@ const LaborWages = () => {
     return millList.find((m) => m._id === id)?.name || "—";
   };
 
+  // 25 Sep, per Rishi: "it adds up in the sheets down below but it is not
+  // organised... same rule for work log" — these CSV/Excel exports used to
+  // walk wageEntries/payments in whatever order the API returned them
+  // (creation order), same gap the in-app tables had (see LedgerSheet's
+  // `filtered` sort above). Sorted chronologically here too, oldest first,
+  // same convention the Report tab's exports and Expenses already use.
+  const sortedForExport = (rows) => [...rows].sort((a, b) => (parseRowDate(a) || 0) - (parseRowDate(b) || 0));
+
   const handleExportWorkLogCsv = () => {
     if (wageEntries.length === 0) {
       alert("No work log entries to export yet");
@@ -1261,7 +1292,7 @@ const LaborWages = () => {
         { key: "rate", label: "Rate" },
         { key: "amount", label: "Amount (INR)" },
       ],
-      wageEntries.map((w) => ({
+      sortedForExport(wageEntries).map((w) => ({
         contractor: contractorName(w.contractorId),
         mill: wageEntryMillName(w),
         master: contractorMaster(w.contractorId),
@@ -1289,7 +1320,7 @@ const LaborWages = () => {
         { key: "advance", label: "Advance" },
         { key: "amount", label: "Amount (INR)" },
       ],
-      payments.map((p) => ({
+      sortedForExport(payments).map((p) => ({
         contractor: contractorName(p.contractorId),
         mill: paymentMillName(p),
         master: contractorMaster(p.contractorId),
@@ -1316,6 +1347,9 @@ const LaborWages = () => {
       alert("No work log entries or payments to export yet");
       return;
     }
+    // Sorted chronologically (oldest first), same as the other exports above
+    // — _sortDate is only for this .sort() and is never in the `columns`
+    // list downloadCsv writes, so it never ends up in the file.
     const combined = [
       ...wageEntries.map((w) => ({
         type: "Work Log",
@@ -1324,6 +1358,7 @@ const LaborWages = () => {
         date: w.dateLabel,
         details: `${wageEntryMillName(w)} — ${w.cft || 0} CFT × ₹${w.rate || 0}`,
         amount: w.amount,
+        _sortDate: parseRowDate(w),
       })),
       ...payments.map((p) => ({
         type: "Payment",
@@ -1332,8 +1367,9 @@ const LaborWages = () => {
         date: p.date,
         details: `${paymentMillName(p)} — ${p.label || "—"}${isAdvancePayment(p) ? " (ADVANCE)" : ""}`,
         amount: p.amount,
+        _sortDate: parseRowDate(p),
       })),
-    ];
+    ].sort((a, b) => (a._sortDate || 0) - (b._sortDate || 0));
     downloadCsv(
       `${FILE_PREFIX}-work-log-and-payments-${todayStr()}.csv`,
       [
