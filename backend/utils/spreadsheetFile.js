@@ -256,5 +256,221 @@ export const buildCombinedLabourWorkbook = async (wageEntries, payments, contrac
   return workbookBuffer(workbook);
 };
 
+// --- Contractor Bill (29 Sep, per Rishi: "the report is looking bad now i
+// think you should follow the report format just like repso cause sir is
+// used to see such bill like reports so create such report pages of all
+// the contractors and in same format") -------------------------------
+//
+// One worksheet PER CONTRACTOR (so each one prints as its own page, like a
+// paper bill) — work history on the left, payment history on the right,
+// same "left side payment right side work log" split Rishi already asked
+// for on the linked Google Sheet (see utils/googleSheets.js's
+// LABOUR_COMBINED_TAB), plus an Opening Balance line up top and a Closing
+// Balance total at the bottom so it reads like sir's own ledger. Scoped via
+// AskUserQuestion to the "Simpler version": a plain chronological list of
+// work/payment rows, NOT the exact weekly-grid rollup-column paper layout.
+
+// Same dateLabel parsing as labourSheetsController.js's parseWorkLogDate —
+// wageEntries carry "DD-MM-YYYY" or "DD-MM-YYYY TO DD-MM-YYYY" rather than a
+// real date field. Duplicated here (not imported) since this is a small,
+// self-contained sort key and spreadsheetFile.js otherwise has no
+// dependency on the controller layer.
+const parseWorkLogDateForSort = (w) => {
+  const first = String(w.dateLabel || "").split(" TO ")[0].trim();
+  const [d, m, y] = first.split("-");
+  if (!d || !m || !y) return Infinity;
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return isNaN(dt.getTime()) ? Infinity : dt.getTime();
+};
+
+const isAdvancePaymentRow = (p) => p.isAdvance === true || /\badv/i.test(p.label || "");
+
+// Excel sheet names: max 31 chars, no \ / * ? : [ ] , and must be unique
+// within the workbook — two contractors named identically (or a name that
+// collides after truncation) would otherwise crash the whole export.
+const sheetNameFor = (name, used) => {
+  const base = String(name || "Contractor").replace(/[\\/*?:[\]]/g, " ").trim().slice(0, 28) || "Contractor";
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate.toLowerCase())) {
+    candidate = `${base} (${n})`.slice(0, 31);
+    n += 1;
+  }
+  used.add(candidate.toLowerCase());
+  return candidate;
+};
+
+const addBillSheet = (workbook, { sheetName, contractor, ownWageEntries, ownPayments }) => {
+  const sheet = workbook.addWorksheet(sheetName, { views: [{ showGridLines: false }] });
+  const colWidths = [13, 9, 10, 14, 3, 13, 12, 18, 14];
+  sheet.columns = colWidths.map((width) => ({ width }));
+  const colCount = colWidths.length;
+
+  const totalEarned = ownWageEntries.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+  const totalPaid = ownPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const totalAdvance = ownPayments.filter(isAdvancePaymentRow).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const openingBalance = Number(contractor.openingBalance || 0);
+  const closingBalance = openingBalance + totalEarned - totalPaid;
+
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = `${APP_NAME} — Contractor Bill`;
+  titleCell.font = { bold: true, size: 14, color: { argb: COLORS.titleFont } };
+  sheet.getRow(1).height = 26;
+
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = [contractor.name, contractor.contractorType ? `Master: ${contractor.contractorType}` : null, `Generated ${new Date().toLocaleDateString("en-IN")}`]
+    .filter(Boolean)
+    .join("   ·   ");
+  subtitleCell.font = { bold: true, size: 12, color: { argb: COLORS.titleFont } };
+  sheet.getRow(2).height = 18;
+
+  sheet.mergeCells(3, 1, 3, colCount);
+  const openingCell = sheet.getCell(3, 1);
+  openingCell.value = `Opening Balance: ${inr(openingBalance)}`;
+  openingCell.font = { italic: true, size: 10, color: { argb: COLORS.subtitleFont } };
+  sheet.getRow(3).height = 16;
+
+  const sectionRowNum = 5;
+  sheet.mergeCells(sectionRowNum, 1, sectionRowNum, 4);
+  sheet.mergeCells(sectionRowNum, 6, sectionRowNum, 9);
+  const sectionRow = sheet.getRow(sectionRowNum);
+  const workHeaderCell = sectionRow.getCell(1);
+  workHeaderCell.value = "WORK HISTORY";
+  const paymentHeaderCell = sectionRow.getCell(6);
+  paymentHeaderCell.value = "PAYMENT HISTORY";
+  [workHeaderCell, paymentHeaderCell].forEach((cell) => {
+    cell.font = { bold: true, color: { argb: COLORS.headerFont } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.headerFill } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+  });
+  sectionRow.height = 18;
+
+  const headerRowNum = 6;
+  const headerRow = sheet.getRow(headerRowNum);
+  const headerLabels = ["Date", "CFT", "Rate", "Amount", "", "Date", "Type", "Label", "Amount"];
+  const rightAligned = new Set([2, 3, 4, 9]);
+  headerLabels.forEach((label, i) => {
+    if (!label) return; // column 5 is a blank spacer between the two blocks
+    const cell = headerRow.getCell(i + 1);
+    cell.value = label;
+    cell.font = { bold: true, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.zebraFill } };
+    cell.border = cellBorder;
+    cell.alignment = { vertical: "middle", horizontal: rightAligned.has(i + 1) ? "right" : "left" };
+  });
+  headerRow.height = 16;
+
+  const workRows = [...ownWageEntries].sort((a, b) => parseWorkLogDateForSort(a) - parseWorkLogDateForSort(b));
+  const paymentRows = [...ownPayments].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+  const dataRowCount = Math.max(workRows.length, paymentRows.length);
+  const dataCols = [1, 2, 3, 4, 6, 7, 8, 9];
+
+  for (let idx = 0; idx < dataRowCount; idx += 1) {
+    const excelRow = sheet.getRow(headerRowNum + 1 + idx);
+    const w = workRows[idx];
+    const p = paymentRows[idx];
+    if (w) {
+      excelRow.getCell(1).value = w.dateLabel || "";
+      excelRow.getCell(2).value = Number(w.cft) || 0;
+      excelRow.getCell(3).value = Number(w.rate) || 0;
+      excelRow.getCell(3).numFmt = CURRENCY_FMT;
+      excelRow.getCell(4).value = Number(w.amount) || 0;
+      excelRow.getCell(4).numFmt = CURRENCY_FMT;
+    }
+    if (p) {
+      excelRow.getCell(6).value = formatDate(p.date);
+      excelRow.getCell(7).value = isAdvancePaymentRow(p) ? "Advance" : "Payment";
+      excelRow.getCell(8).value = p.label || "";
+      excelRow.getCell(9).value = Number(p.amount) || 0;
+      excelRow.getCell(9).numFmt = CURRENCY_FMT;
+    }
+    const zebra = idx % 2 === 1;
+    dataCols.forEach((c) => {
+      const cell = excelRow.getCell(c);
+      cell.border = cellBorder;
+      cell.alignment = { vertical: "middle", horizontal: rightAligned.has(c) ? "right" : "left" };
+      if (zebra) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.zebraFill } };
+    });
+  }
+
+  if (dataRowCount === 0) {
+    const emptyRowNum = headerRowNum + 1;
+    sheet.mergeCells(emptyRowNum, 1, emptyRowNum, 4);
+    sheet.getCell(emptyRowNum, 1).value = "No work logged yet";
+    sheet.mergeCells(emptyRowNum, 6, emptyRowNum, 9);
+    sheet.getCell(emptyRowNum, 6).value = "No payments yet";
+    [1, 6].forEach((c) => {
+      sheet.getCell(emptyRowNum, c).font = { italic: true, color: { argb: COLORS.subtitleFont } };
+    });
+  }
+
+  const summaryStart = headerRowNum + 2 + dataRowCount;
+  const summaryLines = [
+    ["Total Earned", totalEarned],
+    ["Total Paid", totalPaid],
+    ["Total Advance (included in Paid)", totalAdvance],
+    ["Opening Balance", openingBalance],
+    [closingBalance < 0 ? "Closing Balance — owed back to company" : "Closing Balance — pending to pay", Math.abs(closingBalance)],
+  ];
+  summaryLines.forEach(([label, value], i) => {
+    const rowNum = summaryStart + i;
+    const isLast = i === summaryLines.length - 1;
+    sheet.mergeCells(rowNum, 1, rowNum, 6);
+    const labelCell = sheet.getCell(rowNum, 1);
+    labelCell.value = label;
+    sheet.mergeCells(rowNum, 7, rowNum, 9);
+    const valueCell = sheet.getCell(rowNum, 7);
+    valueCell.value = value;
+    valueCell.numFmt = CURRENCY_FMT;
+    valueCell.alignment = { horizontal: "right" };
+    [labelCell, valueCell].forEach((cell) => {
+      cell.font = { bold: true, size: isLast ? 12 : 10 };
+      if (isLast) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.totalFill } };
+    });
+  });
+
+  sheet.views = [{ state: "frozen", ySplit: headerRowNum, showGridLines: false }];
+  return sheet;
+};
+
+// contractors: the full list (not narrowed to whoever has activity) — a
+// contractor with only an opening balance and nothing logged yet still gets
+// a page, since that balance is real money either way. Contractors with
+// truly nothing (no opening balance, no work, no payments) are skipped so
+// the workbook doesn't fill up with empty pages.
+export const buildContractorBillWorkbook = async (contractors, wageEntries, payments) => {
+  const workbook = new ExcelJS.Workbook();
+
+  const wageByContractor = new Map();
+  for (const w of wageEntries) {
+    if (!wageByContractor.has(w.contractorId)) wageByContractor.set(w.contractorId, []);
+    wageByContractor.get(w.contractorId).push(w);
+  }
+  const paymentsByContractor = new Map();
+  for (const p of payments) {
+    if (!paymentsByContractor.has(p.contractorId)) paymentsByContractor.set(p.contractorId, []);
+    paymentsByContractor.get(p.contractorId).push(p);
+  }
+
+  const used = new Set();
+  const sortedContractors = [...contractors].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  for (const contractor of sortedContractors) {
+    const ownWageEntries = wageByContractor.get(contractor._id) || [];
+    const ownPayments = paymentsByContractor.get(contractor._id) || [];
+    if (ownWageEntries.length === 0 && ownPayments.length === 0 && Number(contractor.openingBalance || 0) === 0) continue;
+    addBillSheet(workbook, { sheetName: sheetNameFor(contractor.name, used), contractor, ownWageEntries, ownPayments });
+  }
+
+  if (workbook.worksheets.length === 0) {
+    addBillSheet(workbook, { sheetName: "No Activity", contractor: { name: "No contractors with activity yet" }, ownWageEntries: [], ownPayments: [] });
+  }
+
+  return workbookBuffer(workbook);
+};
+
 export const labourFileName = (type) =>
-  `${FILE_PREFIX}-${type === "payments" ? "payments" : type === "combined" ? "work-log-and-payments" : "work-log"}-${new Date().toISOString().split("T")[0]}.xlsx`;
+  `${FILE_PREFIX}-${
+    type === "payments" ? "payments" : type === "combined" ? "work-log-and-payments" : type === "bill" ? "contractor-bills" : "work-log"
+  }-${new Date().toISOString().split("T")[0]}.xlsx`;

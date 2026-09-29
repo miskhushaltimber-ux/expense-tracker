@@ -15,7 +15,13 @@ import {
   COMBINED_LABOUR_HEADER,
 } from "../utils/googleSheets.js";
 import { parseWorkLogValuesToPreview, parsePaymentValuesToPreview } from "../utils/labourImportParser.js";
-import { buildWorkLogWorkbook, buildPaymentsWorkbook, buildCombinedLabourWorkbook, labourFileName } from "../utils/spreadsheetFile.js";
+import {
+  buildWorkLogWorkbook,
+  buildPaymentsWorkbook,
+  buildCombinedLabourWorkbook,
+  buildContractorBillWorkbook,
+  labourFileName,
+} from "../utils/spreadsheetFile.js";
 import { isEmailConfigured, sendLabourSheetEmail, sendReportEmail } from "../utils/mailer.js";
 import { rowsToCsv } from "../utils/csv.js";
 
@@ -25,7 +31,8 @@ export const getLabourSheetsStatus = (req, res) => {
 
 const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 
-const resolveType = (value) => (value === "payments" ? "payments" : value === "combined" ? "combined" : "worklog");
+const resolveType = (value) =>
+  value === "payments" ? "payments" : value === "combined" ? "combined" : value === "bill" ? "bill" : "worklog";
 
 // 25 Sep, per Rishi: "it adds up in the sheets down below but it is not
 // organised... this weeks payments should be in this week and before that
@@ -118,18 +125,34 @@ export const emailLabourSheet = async (req, res) => {
     } else if (type === "payments") {
       payments = sortPayments(await listPaymentsByUser(req.user.companyId));
       if (payments.length === 0) return res.status(400).json({ message: "There are no payments to send yet" });
+    } else if (type === "bill") {
+      // 29 Sep — the bill is one page per contractor covering their whole
+      // ledger, so (unlike the branches above) it always needs BOTH
+      // wageEntries and payments regardless of which tab it was sent from.
+      [wageEntries, payments] = await Promise.all([
+        listWageEntriesByUser(req.user.companyId),
+        listPaymentsByUser(req.user.companyId),
+      ]);
+      if (wageEntries.length === 0 && payments.length === 0 && contractors.every((c) => !c.openingBalance)) {
+        return res.status(400).json({ message: "There's no contractor activity to bill yet" });
+      }
     } else {
       wageEntries = sortWageEntries(await listWageEntriesByUser(req.user.companyId));
       if (wageEntries.length === 0) return res.status(400).json({ message: "There are no work log entries to send yet" });
     }
 
-    const count = type === "combined" ? wageEntries.length + payments.length : type === "payments" ? payments.length : wageEntries.length;
+    const count =
+      type === "combined" || type === "bill" ? wageEntries.length + payments.length : type === "payments" ? payments.length : wageEntries.length;
     const total =
       wageEntries.reduce((sum, w) => sum + (Number(w.amount) || 0), 0) +
       payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
     let buffer, fileName, contentType;
-    if (format === "csv") {
+    // "bill" is only ever offered as .xlsx from the Report tab (see
+    // ExportSheetModal's emailFormats there) — a flattened CSV can't
+    // represent the two-column work/payment layout, so it's excluded from
+    // the CSV branch below regardless of what `format` says.
+    if (format === "csv" && type !== "bill") {
       let header, rows;
       if (type === "combined") {
         header = COMBINED_LABOUR_HEADER;
@@ -164,6 +187,9 @@ export const emailLabourSheet = async (req, res) => {
       fileName = labourFileName(type);
     } else if (type === "payments") {
       buffer = await buildPaymentsWorkbook(payments, contractorsById);
+      fileName = labourFileName(type);
+    } else if (type === "bill") {
+      buffer = await buildContractorBillWorkbook(contractors, wageEntries, payments);
       fileName = labourFileName(type);
     } else {
       buffer = await buildWorkLogWorkbook(wageEntries, contractorsById);
@@ -209,6 +235,12 @@ export const downloadLabourSheet = async (req, res) => {
     } else if (type === "payments") {
       const payments = sortPayments(await listPaymentsByUser(req.user.companyId));
       buffer = await buildPaymentsWorkbook(payments, contractorsById);
+    } else if (type === "bill") {
+      const [wageEntries, payments] = await Promise.all([
+        listWageEntriesByUser(req.user.companyId),
+        listPaymentsByUser(req.user.companyId),
+      ]);
+      buffer = await buildContractorBillWorkbook(contractors, wageEntries, payments);
     } else {
       const wageEntries = sortWageEntries(await listWageEntriesByUser(req.user.companyId));
       buffer = await buildWorkLogWorkbook(wageEntries, contractorsById);

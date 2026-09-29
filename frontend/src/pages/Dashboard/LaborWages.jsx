@@ -1008,6 +1008,15 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
   const [filterMaster, setFilterMaster] = useState("");
   const [period, setPeriod] = useState("all");
   const periodLabel = PERIOD_OPTIONS.find((p) => p.key === period)?.label || "All Time";
+  // 29 Sep, per Rishi: "the report is looking bad now i think you should
+  // follow the report format just like repso cause sir is used to see such
+  // bill like reports so create such report pages of all the contractors
+  // and in same format" — a second read of the exact same rows/filters as a
+  // stack of paper-bill-style cards (work history one side, payment history
+  // the other, opening + closing balance) instead of the spreadsheet-style
+  // table. Toggle, not a separate tab, so it stays in sync with whatever's
+  // already filtered/selected above.
+  const [viewMode, setViewMode] = useState("table");
 
   // 24 Sep, performance fix (see contractorReport's comment above for the
   // full story) — group wageEntries/payments by contractorId ONCE, only
@@ -1139,6 +1148,28 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
     );
   };
 
+  // Bill download — one printable page per contractor (see spreadsheetFile.js's
+  // buildContractorBillWorkbook). Deliberately company-wide (every
+  // contractor with any activity, not just the ones currently filtered/
+  // searched above) since a bill pack is something Rishi hands to sir as a
+  // whole, same as the Work Log/Payments xlsx downloads never scope to the
+  // on-screen filters either.
+  const [downloadingBill, setDownloadingBill] = useState(false);
+  const handleDownloadBillXlsx = async () => {
+    if (wageEntries.length === 0 && payments.length === 0 && contractors.every((c) => !c.openingBalance)) {
+      alert("There's no contractor activity to bill yet");
+      return;
+    }
+    try {
+      setDownloadingBill(true);
+      await downloadLabourSheetXlsx("bill");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDownloadingBill(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -1189,6 +1220,27 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
             ))}
           </select>
         </div>
+        <div>
+          <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">View</label>
+          <div className="flex rounded-md border border-gray-200 dark:border-gray-700 overflow-hidden text-sm">
+            {[
+              { key: "table", label: "Table" },
+              { key: "bill", label: "Bill" },
+            ].map((v) => (
+              <button
+                key={v.key}
+                onClick={() => setViewMode(v.key)}
+                className={`px-3 py-1.5 font-medium ${
+                  viewMode === v.key
+                    ? "bg-red-500 text-white"
+                    : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
         {activeFilterCount > 0 && (
           <button
             onClick={() => {
@@ -1205,6 +1257,14 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
           <DownloadMenu
             options={[
               { key: "csv", label: "Download CSV", description: "Contractor report — Earned, Paid, Advance, Balance", onClick: handleExportReportCsv },
+              {
+                key: "bill-xlsx",
+                label: "Download Bills (Excel)",
+                description: "One printable bill per contractor — work history, payment history, balance",
+                busy: downloadingBill,
+                busyLabel: "Preparing bills…",
+                onClick: handleDownloadBillXlsx,
+              },
               {
                 key: "gsheet",
                 label: "Push to Google Sheet",
@@ -1231,6 +1291,93 @@ const SummaryReport = ({ contractors, contractorOptions, wageEntries, payments, 
       {rows.length === 0 ? (
         <div className="text-sm text-gray-400 italic">
           {inScope.length === 0 ? "No contractors yet." : "No contractors match your search/filters."}
+        </div>
+      ) : viewMode === "bill" ? (
+        <div className="space-y-4">
+          {rows.map(({ contractor: c, report, status }) => {
+            // Bill view always shows the FULL ledger (all-time), not the
+            // period-scoped stats.earned/paid the table uses — a bill is
+            // sir's whole running account with a contractor, not a
+            // this-week/this-month slice of it.
+            const ownWork = [...(wageEntriesByContractor.get(c._id) || [])].sort(
+              (a, b) => (parseDateLabel(a.dateLabel)?.getTime() ?? Infinity) - (parseDateLabel(b.dateLabel)?.getTime() ?? Infinity)
+            );
+            const ownPay = [...(paymentsByContractor.get(c._id) || [])].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+            return (
+              <div key={c._id} className={`rounded-xl border overflow-hidden shadow-sm ${REPORT_ROW_TINT[status.key]}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2 px-4 sm:px-5 py-3 bg-white/60 dark:bg-black/20 border-b border-black/5 dark:border-white/10">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">{c.name}</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      {c.contractorType || "No master set"} · Opening Balance {money(report.openingBalance)}
+                    </p>
+                  </div>
+                  <span className={`inline-block text-xs font-medium px-2.5 py-1 rounded-full ${REPORT_BADGE[status.key]}`}>{status.label}</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-black/5 dark:divide-white/10">
+                  <div className="px-4 sm:px-5 py-3">
+                    <h4 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Work History</h4>
+                    {ownWork.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">No work logged yet</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-gray-400 dark:text-gray-500">
+                            <th className="font-medium pb-1 pr-2">Date</th>
+                            <th className="font-medium pb-1 pr-2">CFT × Rate</th>
+                            <th className="font-medium pb-1 text-right">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                          {ownWork.map((w) => (
+                            <tr key={w._id}>
+                              <td className="py-1 pr-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{w.dateLabel}</td>
+                              <td className="py-1 pr-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{Number(w.cft) || 0} × {money(w.rate)}</td>
+                              <td className="py-1 text-right font-medium text-gray-700 dark:text-gray-200">{money(w.amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div className="px-4 sm:px-5 py-3">
+                    <h4 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Payment History</h4>
+                    {ownPay.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">No payments yet</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-gray-400 dark:text-gray-500">
+                            <th className="font-medium pb-1 pr-2">Date</th>
+                            <th className="font-medium pb-1 pr-2">Type</th>
+                            <th className="font-medium pb-1 text-right">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                          {ownPay.map((p) => (
+                            <tr key={p._id}>
+                              <td className="py-1 pr-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{formatShortDate(p.date)}</td>
+                              <td className="py-1 pr-2 text-gray-500 dark:text-gray-400 whitespace-nowrap">{isAdvancePayment(p) ? "Advance" : "Payment"}{p.label ? ` · ${p.label}` : ""}</td>
+                              <td className="py-1 text-right font-medium text-gray-700 dark:text-gray-200">{money(p.amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-1 px-4 sm:px-5 py-2.5 bg-white/60 dark:bg-black/20 border-t border-black/5 dark:border-white/10 text-xs">
+                  <span className="text-gray-500 dark:text-gray-400">Total Earned <span className="font-semibold text-gray-700 dark:text-gray-200">{money(report.totalEarned)}</span></span>
+                  <span className="text-gray-500 dark:text-gray-400">Total Paid <span className="font-semibold text-gray-700 dark:text-gray-200">{money(report.totalPaid)}</span></span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-100">
+                    {report.balance < 0 ? `Owes back ${money(-report.balance)}` : `Balance ${money(report.balance)}`}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
