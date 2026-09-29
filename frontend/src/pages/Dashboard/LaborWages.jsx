@@ -5,11 +5,13 @@ import {
   fetchContractors,
   fetchWageEntries,
   addWageEntry,
+  updateWageEntry,
   deleteWageEntry,
   bulkAddWageEntries,
   bulkDeleteWageEntries,
   fetchPayments,
   addPayment,
+  updatePayment,
   deletePayment,
   bulkAddPayments,
   bulkDeletePayments,
@@ -365,6 +367,7 @@ const LedgerSheet = ({
   computeAmount, // (draft) => number|null — shown live in the draft row; null hides it
   renderAmount, // (row) => string
   onAdd,
+  onUpdate, // (id, updates) => Promise<entity> — 25 Sep, per Rishi: "can we edit data in the existing data entries... bored to delete and create a new one again and again". Omit to leave a saved row read-only (delete-only), same as before.
   onDelete,
   onBulkDelete, // (ids) => Promise — omit to leave bulk-delete off for this sheet
   search,
@@ -413,6 +416,64 @@ const LedgerSheet = ({
     // `location`, which only broke rows whose Mill has no location set.
     // `location` is used just for the Contractor label's "(KTPL I)" suffix.
     return millList.find((m) => m._id === id)?.name || "—";
+  };
+
+  // Editing an already-saved row (25 Sep, per Rishi: "can we edit data in
+  // the existing data entries bro cause i am bored to delete and create a
+  // new one again and again"). Every field below saves the moment it's
+  // changed (select/checkbox/date picker) or on blur (free-typed text/
+  // number) — same split Expenses.jsx already uses for its custom columns.
+  // Optimistic: the visible row updates immediately, then the real save
+  // happens in the background; a failed save just alerts and leaves the row
+  // as last-saved (a reload would show the true value again).
+  const saveField = async (id, updates) => {
+    if (!onUpdate || String(id).startsWith("temp-")) return;
+    try {
+      const saved = await onUpdate(id, updates);
+      if (saved) setRows((prev) => prev.map((r) => (r._id === id ? saved : r)));
+    } catch (err) {
+      alert(err.message || "Failed to save that change — reload to see the last saved value");
+    }
+  };
+
+  const handleEditContractor = (row, newContractorId) => {
+    const newMillList = contractorById.get(newContractorId)?.millList || [];
+    const millStillValid = newMillList.some((m) => m._id === resolveMillId(row));
+    const updates = { contractorId: newContractorId, ...(millPicker && !millStillValid ? { millId: "" } : {}) };
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, ...updates } : r)));
+    saveField(row._id, updates);
+  };
+
+  const handleEditMill = (row, newMillId) => {
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, millId: newMillId } : r)));
+    saveField(row._id, { millId: newMillId });
+  };
+
+  const handleEditAdvance = (row, checked) => {
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, isAdvance: checked } : r)));
+    saveField(row._id, { isAdvance: checked });
+  };
+
+  // Payments' date is a real <input type="date"> value — atomic on change,
+  // same as the Contractor/Mill/Advance edits above.
+  const handleEditDate = (row, newDate) => {
+    if (!newDate) return; // date is required — an empty picker mid-edit isn't a save
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, date: newDate } : r)));
+    saveField(row._id, { date: newDate });
+  };
+
+  // Free-typed cells (Work Log's dateLabel, CFT/Rate/Label/Amount) save on
+  // blur, not on every keystroke — same reasoning as Expenses.jsx's
+  // handleCustomFieldBlur: re-sorting/re-rendering the whole ledger on every
+  // character typed (dateLabel drives the row's sort position) would make
+  // the row jump around mid-edit.
+  const handleTextFieldBlur = (row, key, rawValue) => {
+    const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    const current = row[key];
+    if (String(value ?? "") === String(current ?? "")) return; // nothing actually changed
+    if ((key === "dateLabel" || key === "contractorId") && !value) return; // required — don't save it blank
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, [key]: value } : r)));
+    saveField(row._id, { [key]: value });
   };
 
   // Custom columns (21 Sep) — Work Log and Payments keep independent column
@@ -636,6 +697,12 @@ const LedgerSheet = ({
 
         {filtered.map((row) => {
           const c = contractorById.get(row.contractorId);
+          // Editable once it's actually saved (a still-pending optimistic
+          // row can't be PATCHed yet — see saveField's temp-id guard above).
+          const editable = !!onUpdate && !row._pending;
+          const rowMills = contractorById.get(row.contractorId)?.millList || [];
+          const cellInputClass =
+            "w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 rounded px-1.5 py-1 bg-transparent focus:outline-none focus:ring-1 focus:ring-red-400 focus:border-red-400 focus:bg-white dark:focus:bg-gray-800";
           return (
             <tr
               key={row._id}
@@ -664,16 +731,94 @@ const LedgerSheet = ({
                   Payments used to show that straight through, which read as
                   US-style to Rishi (25 Sep: "payments date is not according
                   to indian region format"). ddmmyyyy matches what Work Log's
-                  own dateLabel has looked like all along. */}
-              <td className="px-3 py-2" colSpan={dateCols}>{row.date ? ddmmyyyy(row.date) : row.dateLabel}</td>
-              <td className="px-3 py-2">{c?.label || "—"}</td>
-              {millPicker && <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{resolveMillName(row)}</td>}
+                  own dateLabel has looked like all along. 25 Sep (same
+                  message): "can we edit data in the existing data entries...
+                  bored to delete and create a new one again and again" —
+                  every cell here is now an editable input when onUpdate is
+                  wired up, instead of frozen text. */}
+              <td className="px-3 py-2" colSpan={dateCols}>
+                {editable ? (
+                  row.date !== undefined ? (
+                    <input
+                      type="date"
+                      defaultValue={row.date}
+                      onChange={(e) => handleEditDate(row, e.target.value)}
+                      className={cellInputClass}
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      defaultValue={row.dateLabel}
+                      onBlur={(e) => handleTextFieldBlur(row, "dateLabel", e.target.value)}
+                      className={cellInputClass}
+                    />
+                  )
+                ) : (
+                  row.date ? ddmmyyyy(row.date) : row.dateLabel
+                )}
+              </td>
+              <td className="px-3 py-2">
+                {editable ? (
+                  <select
+                    value={row.contractorId}
+                    onChange={(e) => handleEditContractor(row, e.target.value)}
+                    className={cellInputClass}
+                  >
+                    {contractorOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  c?.label || "—"
+                )}
+              </td>
+              {millPicker && (
+                <td className="px-3 py-2 text-gray-500 dark:text-gray-400">
+                  {editable && rowMills.length > 1 ? (
+                    <select
+                      value={resolveMillId(row) || ""}
+                      onChange={(e) => handleEditMill(row, e.target.value)}
+                      className={cellInputClass}
+                    >
+                      <option value="">{millRequired ? "Which mill?" : "All mills (whole payment)"}</option>
+                      {rowMills.map((m) => (
+                        <option key={m._id} value={m._id}>{m.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    resolveMillName(row)
+                  )}
+                </td>
+              )}
               <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c?.master || "—"}</td>
               {advanceToggle && (
-                <td className="px-3 py-2 text-center">{isAdvancePayment(row) ? "✓" : "—"}</td>
+                <td className="px-3 py-2 text-center">
+                  {editable ? (
+                    <input
+                      type="checkbox"
+                      checked={isAdvancePayment(row)}
+                      onChange={(e) => handleEditAdvance(row, e.target.checked)}
+                      title="Advance — paid before the corresponding work is logged"
+                      className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+                    />
+                  ) : isAdvancePayment(row) ? "✓" : "—"}
+                </td>
               )}
               {fields.map((f) => (
-                <td key={f.key} className="px-3 py-2">{f.format ? f.format(row[f.key]) : row[f.key]}</td>
+                <td key={f.key} className="px-3 py-2">
+                  {editable ? (
+                    <input
+                      type={f.type || "text"}
+                      defaultValue={row[f.key]}
+                      onBlur={(e) => handleTextFieldBlur(row, f.key, e.target.value)}
+                      className={cellInputClass}
+                    />
+                  ) : f.format ? (
+                    f.format(row[f.key])
+                  ) : (
+                    row[f.key]
+                  )}
+                </td>
               ))}
               {customColumns.map((col) => (
                 <td key={col._id} className="px-3 py-2">
@@ -1216,19 +1361,38 @@ const LaborWages = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [filterMill, setFilterMill] = useState("");
   const [filterContractors, setFilterContractors] = useState([]);
+  // Master (25 Sep, per Rishi: Repso contractors are logged in a totally
+  // different paper format than Mill/Bundle Thekedars — "the repso format is
+  // so different with mill thekedars and others... click on REPSO button and
+  // sheet comes of REPSO in worklog and payments both". Rather than a
+  // one-off "Repso" button, this reuses the same Master filter the Report
+  // tab already had (SummaryReport's filterMaster) — pick "Repso" here and
+  // Work Log/Payments narrow down to just those contractors, same idea, now
+  // in one place that works for any Master, not just Repso. Requires each
+  // Repso contractor's Master set to "Repso" on Manage Data first.
+  const [filterMaster, setFilterMaster] = useState("");
   // Date From/To (24 Sep, per Rishi: "also add filter in the labor
   // dashboard") — same Date range filter the Expense Sheet and Vehicle
   // Expense Sheet already have, applied to both Work Log and Payments.
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
   const activeFilterCount =
-    (filterMill ? 1 : 0) + (filterContractors.length > 0 ? 1 : 0) + (filterDateFrom ? 1 : 0) + (filterDateTo ? 1 : 0);
+    (filterMill ? 1 : 0) +
+    (filterMaster ? 1 : 0) +
+    (filterContractors.length > 0 ? 1 : 0) +
+    (filterDateFrom ? 1 : 0) +
+    (filterDateTo ? 1 : 0);
   const clearFilters = () => {
     setFilterMill("");
+    setFilterMaster("");
     setFilterContractors([]);
     setFilterDateFrom("");
     setFilterDateTo("");
   };
+  const masterOptions = useMemo(
+    () => [...new Set(contractors.map((c) => c.contractorType).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [contractors]
+  );
 
   // Import/Download/Share for Work Log and Payments (18 Sep, per Rishi: "add
   // import download and export option in the vehicle section and labor
@@ -1456,12 +1620,13 @@ const LaborWages = () => {
   }, [contractors, mills]);
 
   const allowedContractorIds = useMemo(() => {
-    if (!filterMill && filterContractors.length === 0) return null;
+    if (!filterMill && !filterMaster && filterContractors.length === 0) return null;
     let ids = contractors.map((c) => c._id);
     if (filterMill) ids = ids.filter((id) => (contractors.find((c) => c._id === id)?.millIds || []).includes(filterMill));
+    if (filterMaster) ids = ids.filter((id) => contractors.find((c) => c._id === id)?.contractorType === filterMaster);
     if (filterContractors.length > 0) ids = ids.filter((id) => filterContractors.includes(id));
     return new Set(ids);
-  }, [contractors, filterMill, filterContractors]);
+  }, [contractors, filterMill, filterMaster, filterContractors]);
 
   if (loading) {
     return <div className="p-4 sm:p-6 text-sm text-gray-400">Loading…</div>;
@@ -1519,6 +1684,23 @@ const LaborWages = () => {
               <option value="">All mills</option>
               {mills.map((m) => (
                 <option key={m._id} value={m._id}>{m.name} ({m.location})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            {/* 25 Sep, per Rishi: pick "Repso" here to get just the Repso
+                contractors' sheet in Work Log/Payments — set each one's
+                Master to "Repso" on Manage Data first, or it won't show up
+                below. */}
+            <label className="block text-xs font-medium mb-1 text-gray-500 dark:text-gray-400">Master</label>
+            <select
+              value={filterMaster}
+              onChange={(e) => setFilterMaster(e.target.value)}
+              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
+            >
+              <option value="">All masters</option>
+              {masterOptions.map((m) => (
+                <option key={m} value={m}>{m}</option>
               ))}
             </select>
           </div>
@@ -1683,6 +1865,11 @@ const LaborWages = () => {
                   customFields: draft.customFields,
                 })
               }
+              // 25 Sep, per Rishi: "can we edit data in the existing data
+              // entries" — no `.then(loadData)` here, same reasoning as
+              // onAdd above: LedgerSheet does its own optimistic update and
+              // just needs the saved entity back.
+              onUpdate={(id, updates) => updateWageEntry(id, updates)}
               onDelete={(id) => deleteWageEntry(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeleteWageEntries(ids).then(loadData)}
               search={search}
@@ -1777,6 +1964,7 @@ const LaborWages = () => {
                   customFields: draft.customFields,
                 })
               }
+              onUpdate={(id, updates) => updatePayment(id, updates)}
               onDelete={(id) => deletePayment(id).then(loadData)}
               onBulkDelete={(ids) => bulkDeletePayments(ids).then(loadData)}
               search={search}
