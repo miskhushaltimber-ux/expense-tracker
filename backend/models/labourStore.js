@@ -70,8 +70,20 @@ const HEADERS = {
   // millId (24 Sep, per Rishi: "add mill column in the payments too cause
   // how will we know we paid which mill") — same optional field/same
   // reasoning as wageEntries.millId above: blank for a single-mill (or
-  // not-yet-assigned) contractor, only needed to disambiguate a multi-mill one.
-  payments: ["id", "userId", "contractorId", "millId", "date", "label", "amount", "createdAt", "updatedAt", "customFields"],
+  // not-yet-assigned) contractor, only needed to disambiguate a multi-mill
+  // one. Left BLANK on purpose (25 Sep, per Rishi: Jamir got paid one lump
+  // sum across all 4 of his mills, not mill-by-mill) means "whole payment,
+  // every mill this contractor covers" — see millRequired in LaborWages.jsx.
+  //
+  // isAdvance (25 Sep, per Rishi: "we have to add advance column too cause
+  // some of them gets advance payments too") — a real checkbox now, stored
+  // as the string "true"/"false" (arrives over multipart form-data like
+  // everything else here). Before this field existed, "is this an advance"
+  // was inferred purely from the Label containing "ADV" (isAdvancePayment in
+  // LaborWages.jsx) — that text-match convention still works as a fallback
+  // for any payment logged before today, so nothing already tagged that way
+  // drops out of the Advance totals.
+  payments: ["id", "userId", "contractorId", "millId", "date", "label", "amount", "isAdvance", "createdAt", "updatedAt", "customFields"],
 };
 
 export const ensureMillsSheet = () => ensureSheetTab(SHEETS.mills, HEADERS.mills);
@@ -168,6 +180,7 @@ const toPayment = (row) => ({
   date: row.date || "",
   label: row.label || "",
   amount: num(row.amount),
+  isAdvance: row.isAdvance === true || row.isAdvance === "true",
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   customFields: parseCustomFields(row.customFields),

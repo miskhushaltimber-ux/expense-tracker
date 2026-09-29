@@ -103,10 +103,24 @@ const combineDateRange = (from, to) => {
 // ledger, existing rows included, which is what got slower and slower as a
 // contractor's history grew. Typing now only re-renders this one small row;
 // LedgerSheet's existing-row list is completely untouched by it.
-const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns, computeAmount, onAdd, onBulkDelete, setRows, millPicker }) => {
+const DraftRow = ({
+  isRange,
+  dateType,
+  fields,
+  contractorOptions,
+  customColumns,
+  computeAmount,
+  onAdd,
+  onBulkDelete,
+  setRows,
+  millPicker,
+  millRequired = true,
+  advanceToggle,
+}) => {
   const emptyDraft = () => ({
     contractorId: "",
     ...(millPicker ? { millId: "" } : {}),
+    ...(advanceToggle ? { isAdvance: false } : {}),
     ...(isRange ? { dateFrom: "", dateTo: "" } : { date: "" }),
     ...Object.fromEntries(fields.map((f) => [f.key, ""])),
     customFields: {},
@@ -141,7 +155,13 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
     // mills' CFT into one entry loses which mill produced what). A
     // single-mill (or not-yet-assigned) contractor has nothing to pick, so
     // it's auto-filled instead of forcing a pointless extra click.
-    if (millPicker && contractorMills.length > 1 && !draft.millId) return;
+    // millRequired=false (25 Sep, Payments only, per Rishi: "why dont we
+    // click all mills and do a whole payment also" — a lump-sum payment
+    // covering everything a contractor's owed across all their mills is a
+    // real thing sir does; forcing one specific mill on every payment was
+    // the actual bug, not a feature) — leaving Mill blank on Payments is a
+    // valid, deliberate choice, not an incomplete row.
+    if (millPicker && millRequired && contractorMills.length > 1 && !draft.millId) return;
     const resolvedMillId = millPicker ? draft.millId || (contractorMills.length === 1 ? contractorMills[0]._id : "") : undefined;
 
     // Optimistic insert (22 Sep, per Rishi: hitting Enter used to visibly
@@ -157,6 +177,7 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
       _id: tempId,
       contractorId: submittedDraft.contractorId,
       ...(millPicker ? { millId: submittedDraft.millId } : {}),
+      ...(advanceToggle ? { isAdvance: !!submittedDraft.isAdvance } : {}),
       date: dateValue,
       dateLabel: dateValue,
       ...Object.fromEntries(fields.map((f) => [f.key, submittedDraft[f.key]])),
@@ -261,7 +282,7 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
               onKeyDown={(e) => handleKeyDown(e, "millId")}
               className="border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
             >
-              <option value="">Which mill?</option>
+              <option value="">{millRequired ? "Which mill?" : "All mills (whole payment)"}</option>
               {contractorMills.map((m) => (
                 <option key={m._id} value={m._id}>{m.name}</option>
               ))}
@@ -274,6 +295,17 @@ const DraftRow = ({ isRange, dateType, fields, contractorOptions, customColumns,
       <td className="px-3 py-2 text-gray-400">
         {contractorOptions.find((o) => o.value === draft.contractorId)?.master || "—"}
       </td>
+      {advanceToggle && (
+        <td className="px-3 py-2 text-center">
+          <input
+            type="checkbox"
+            checked={!!draft.isAdvance}
+            onChange={(e) => setDraft((d) => ({ ...d, isAdvance: e.target.checked }))}
+            title="Advance — paid before the corresponding work is logged"
+            className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+          />
+        </td>
+      )}
       {fields.map((f) => (
         <td key={f.key} className="px-3 py-2">
           <input
@@ -338,7 +370,9 @@ const LedgerSheet = ({
   search,
   allowedContractorIds, // Set of contractorId, or null/undefined for "no filter"
   sheetKey, // "wageEntries" | "payments" — this ledger's own custom-column set
-  millPicker, // true only for Work Log (23 Sep) — shows a per-entry Mill column/picker
+  millPicker, // true for both Work Log and Payments (23/24 Sep) — shows a per-entry Mill column/picker
+  millRequired = true, // false on Payments only (25 Sep) — a lump-sum payment can cover every mill a contractor has, not just one
+  advanceToggle, // true only for Payments (25 Sep) — shows a per-entry Advance checkbox
   filterMillId, // optional — narrows rows to just this one mill's entries (Work Log only)
   filterDateFrom, // optional — "YYYY-MM-DD", narrows rows to on/after this date
   filterDateTo, // optional — "YYYY-MM-DD", narrows rows to on/before this date
@@ -368,8 +402,12 @@ const LedgerSheet = ({
   };
   const resolveMillName = (row) => {
     const id = resolveMillId(row);
-    if (!id) return "—";
     const millList = contractorById.get(row.contractorId)?.millList || [];
+    // 25 Sep, per Rishi: "why dont we click all mills and do a whole
+    // payment" — no millId on a row now legitimately means "covers every
+    // mill this contractor has" (Payments only), not "unresolved" — only
+    // call it "—" when the contractor has no mills assigned at all.
+    if (!id) return millList.length > 1 ? "All mills" : "—";
     // 24 Sep, per Rishi — this IS what the Mill column should show (Repso,
     // Bundle, Core Loading, ...); an earlier pass mistakenly swapped this to
     // `location`, which only broke rows whose Mill has no location set.
@@ -538,6 +576,7 @@ const LedgerSheet = ({
           <th className="px-3 py-2 font-medium">Contractor</th>
           {millPicker && <th className="px-3 py-2 font-medium">Mill</th>}
           <th className="px-3 py-2 font-medium">Master</th>
+          {advanceToggle && <th className="px-3 py-2 font-medium text-center">Advance</th>}
           {fields.map((f) => (
             <th key={f.key} className="px-3 py-2 font-medium">{f.label}</th>
           ))}
@@ -560,12 +599,16 @@ const LedgerSheet = ({
           onBulkDelete={onBulkDelete}
           setRows={setRows}
           millPicker={millPicker}
+          millRequired={millRequired}
+          advanceToggle={advanceToggle}
         />
 
         {filtered.length === 0 && (
           <tr>
             <td
-              colSpan={(onBulkDelete ? 1 : 0) + dateCols + 3 + (millPicker ? 1 : 0) + fields.length + customColumns.length + (computeAmount ? 1 : 0)}
+              colSpan={
+                (onBulkDelete ? 1 : 0) + dateCols + 3 + (millPicker ? 1 : 0) + (advanceToggle ? 1 : 0) + fields.length + customColumns.length + (computeAmount ? 1 : 0)
+              }
               className="px-3 py-2 text-gray-400 italic"
             >
               {rows.length === 0 ? "Nothing logged yet." : "No rows match your search/filters."}
@@ -603,6 +646,9 @@ const LedgerSheet = ({
               <td className="px-3 py-2">{c?.label || "—"}</td>
               {millPicker && <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{resolveMillName(row)}</td>}
               <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{c?.master || "—"}</td>
+              {advanceToggle && (
+                <td className="px-3 py-2 text-center">{isAdvancePayment(row) ? "✓" : "—"}</td>
+              )}
               {fields.map((f) => (
                 <td key={f.key} className="px-3 py-2">{f.format ? f.format(row[f.key]) : row[f.key]}</td>
               ))}
@@ -659,14 +705,14 @@ const contractorReport = (contractor, ownWageEntries, ownPayments) => {
   return { totalEarned, totalPaid, openingBalance, balance, totalAdvance };
 };
 
-// A payment counts as an ADVANCE if its Label mentions it (23 Sep, per
-// Rishi: "my boss pays the contractors in advance too but mainly the
-// payments are done on weekly workflow basis"). Deliberately no new field/
-// checkbox anywhere — Rishi's team already writes things like "CASH/ADV" in
-// the Label column on real entries (see labourStore.js's own comment on that
-// field), so reading that same free text is the simplest way to split
-// advances out without adding another input to the Payments sheet.
-const isAdvancePayment = (payment) => /\badv/i.test(payment.label || "");
+// A payment counts as an ADVANCE if its own `isAdvance` checkbox is ticked
+// (25 Sep, per Rishi: "we have to add advance column too cause some of them
+// gets advance payments too") — a real column now, not just a typing
+// convention. Falls back to the old "does the Label mention it" text-match
+// (23 Sep) for any payment logged before this checkbox existed, so nothing
+// already tagged "CASH/ADV" in its Label silently drops out of the Advance
+// totals below.
+const isAdvancePayment = (payment) => payment.isAdvance === true || /\badv/i.test(payment.label || "");
 
 // Weekly/Monthly/Yearly report view (23 Sep, per Rishi: "give option to see
 // report on weekly basis monthly bases and yearly basis"). Payments carry a
@@ -1187,9 +1233,15 @@ const LaborWages = () => {
   // Same resolution, for Payments (24 Sep, per Rishi: "add mill column in
   // the payments too cause how will we know we paid which mill") — Payments
   // now carry their own optional millId, same as Work Log entries do.
+  // 25 Sep — a payment with no millId is no longer an unresolved mystery,
+  // it's a deliberate whole/lump-sum payment across every mill a contractor
+  // works (see millRequired={false} on the Payments LedgerSheet below), so
+  // say that instead of a bare dash whenever the contractor has more than
+  // one mill. Same fallback LedgerSheet's own resolveMillName uses.
   const paymentMillName = (p) => {
     const millList = contractorOptions.find((o) => o.value === p.contractorId)?.millList || [];
     const id = p.millId || (millList.length === 1 ? millList[0]._id : null);
+    if (!id) return millList.length > 1 ? "All mills" : "—";
     return millList.find((m) => m._id === id)?.name || "—";
   };
 
@@ -1234,6 +1286,7 @@ const LaborWages = () => {
         { key: "master", label: "Master" },
         { key: "date", label: "Date" },
         { key: "label", label: "Label" },
+        { key: "advance", label: "Advance" },
         { key: "amount", label: "Amount (INR)" },
       ],
       payments.map((p) => ({
@@ -1242,6 +1295,7 @@ const LaborWages = () => {
         master: contractorMaster(p.contractorId),
         date: p.date,
         label: p.label,
+        advance: isAdvancePayment(p) ? "Yes" : "No",
         amount: p.amount,
       }))
     );
@@ -1276,7 +1330,7 @@ const LaborWages = () => {
         contractor: contractorName(p.contractorId),
         master: contractorMaster(p.contractorId),
         date: p.date,
-        details: `${paymentMillName(p)} — ${p.label || "—"}`,
+        details: `${paymentMillName(p)} — ${p.label || "—"}${isAdvancePayment(p) ? " (ADVANCE)" : ""}`,
         amount: p.amount,
       })),
     ];
@@ -1679,10 +1733,11 @@ const LaborWages = () => {
                 // `.then(loadData)` reloading everything after each add.
                 addPayment({
                   contractorId: draft.contractorId,
-                  millId: draft.millId, // 24 Sep — which mill this payment was for, same as Work Log
+                  millId: draft.millId, // 24 Sep — which mill this payment was for, same as Work Log. Can be blank now (25 Sep, see millRequired below) — a lump-sum payment across every mill a contractor works.
                   date: draft.date,
                   label: draft.label,
                   amount: draft.amount,
+                  isAdvance: draft.isAdvance, // 25 Sep — real Advance checkbox, per Rishi (Jamir gets advances on some payments)
                   customFields: draft.customFields,
                 })
               }
@@ -1692,6 +1747,11 @@ const LaborWages = () => {
               allowedContractorIds={allowedContractorIds}
               sheetKey="payments"
               millPicker
+              // 25 Sep, per Rishi (Jamir now spans 4 mills, paid as one lump
+              // sum): Payments, unlike Work Log, doesn't have to say which
+              // mill — leaving Mill blank means "whole payment, all mills".
+              millRequired={false}
+              advanceToggle
               filterMillId={filterMill}
               filterDateFrom={filterDateFrom}
               filterDateTo={filterDateTo}

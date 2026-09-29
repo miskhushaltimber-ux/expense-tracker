@@ -207,8 +207,9 @@ const wageEntryHandlers = makeSimpleHandlers({
 const paymentHandlers = makeSimpleHandlers({
   listByUser: listPaymentsByUser, create: createPayment, updateById: updatePaymentById, deleteById: deletePaymentById,
   // millId (24 Sep) — optional, which mill this payment was for, same as
-  // wageEntryHandlers' millId below.
-  fields: ["contractorId", "millId", "date", "label", "amount", "customFields"], required: ["contractorId", "date"], label: "Payment",
+  // wageEntryHandlers' millId below. isAdvance (25 Sep) — real Advance
+  // checkbox, see labourStore.js HEADERS.payments comment.
+  fields: ["contractorId", "millId", "date", "label", "amount", "isAdvance", "customFields"], required: ["contractorId", "date"], label: "Payment",
   labelFor: (p) => `${p.label || "Payment"} — ₹${p.amount || 0}`,
 });
 
