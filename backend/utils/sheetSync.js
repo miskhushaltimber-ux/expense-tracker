@@ -20,7 +20,14 @@
 import { findCompanyById } from "../models/companyStore.js";
 import { listExpensesByUser } from "../models/expenseStore.js";
 import { listWageEntriesByUser, listPaymentsByUser, listContractorsByUser } from "../models/labourStore.js";
-import { exportExpensesToSheet, exportWorkLogToSheet, exportPaymentsToSheet } from "./googleSheets.js";
+import {
+  exportExpensesToSheet,
+  exportWorkLogToSheet,
+  exportPaymentsToSheet,
+  LABOUR_COMBINED_TAB,
+  PAYMENTS_START_COL,
+  WORK_LOG_START_COL,
+} from "./googleSheets.js";
 
 // wageEntries carry dateLabel ("DD-MM-YYYY" or "DD-MM-YYYY TO DD-MM-YYYY",
 // see LaborWages.jsx's combineDateRange) rather than a real date field —
@@ -61,21 +68,77 @@ export const pushToLinkedSheet = async (companyId, kind) => {
     // so this week's rows land together instead of wherever they happened
     // to be typed in.
     const sorted = [...wageEntries].sort((a, b) => parseWorkLogDate(a) - parseWorkLogDate(b));
-    await exportWorkLogToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), "Work Log");
+    // 25 Sep, per Rishi: "dont keep it seperatly enter both the data in one
+    // sheet only right side worklog and leftside payment" — Work Log now
+    // lands in the right-hand block (from column F) of the shared
+    // "Work Log & Payments" tab instead of its own "Work Log" tab.
+    await exportWorkLogToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), LABOUR_COMBINED_TAB, {
+      startCol: WORK_LOG_START_COL,
+      applyFilter: false,
+    });
   } else if (kind === "payments") {
     const [payments, contractors] = await Promise.all([listPaymentsByUser(companyId), listContractorsByUser(companyId)]);
     const sorted = [...payments].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
-    await exportPaymentsToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), "Payments");
+    // Left-hand block (column A) of the same shared tab — see comment above.
+    await exportPaymentsToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), LABOUR_COMBINED_TAB, {
+      startCol: PAYMENTS_START_COL,
+      applyFilter: false,
+    });
   }
   return true;
 };
 
+// 25 Sep, per Rishi: "all the sheets are unformated and typography is bad
+// too" — found it. Every create/update/delete fires its own syncLinkedSheet
+// call, and each one independently does clear-the-tab -> rewrite every row
+// -> reformat (bold header, borders, currency, zebra stripes). A burst of
+// several saves close together (a bulk import, or just a few quick entries)
+// fires several of THESE full cycles against the same tab at once. Two
+// overlapping cycles can interleave — one's `clear()` landing in the middle
+// of another's write, or the LAST cycle to actually finish having read the
+// row list a beat before a slightly-later one added more rows — so whichever
+// cycle's reformat step ends up covering fewer rows than are actually on the
+// sheet leaves the extra rows with raw, unformatted numbers. That's exactly
+// the pattern on Rishi's linked sheet: the older/Aug rows have the ₹
+// formatting, everything from the 14–20 Sep batch onward doesn't. Fix: only
+// one sync per (companyId, kind) actually runs at a time now. A sync
+// requested while one's already in flight doesn't fire in parallel — it
+// waits, then the queue runs ONE more full cycle afterward (not one per
+// request piled up), so whatever's latest always ends up fully written and
+// reformatted, no matter how many saves happened while it was busy.
+const syncQueues = new Map(); // `${companyId}:${kind}` -> { running: Promise|null, rerunQueued: boolean }
+
+const runSerialized = (key, fn) => {
+  let entry = syncQueues.get(key);
+  if (!entry) {
+    entry = { running: null, rerunQueued: false };
+    syncQueues.set(key, entry);
+  }
+  if (entry.running) {
+    entry.rerunQueued = true;
+    return entry.running;
+  }
+  const run = () =>
+    fn().finally(() => {
+      if (entry.rerunQueued) {
+        entry.rerunQueued = false;
+        entry.running = run();
+      } else {
+        entry.running = null;
+      }
+    });
+  entry.running = run();
+  return entry.running;
+};
+
 // The fire-and-forget wrapper every store-layer call site above uses —
 // same work, but never throws, so a Sheets hiccup can never delay or fail
-// the save the user is actually waiting on.
+// the save the user is actually waiting on. Serialized per (companyId, kind)
+// via runSerialized above so overlapping saves can't race each other's
+// clear/write/format cycle on the same tab (see the comment there).
 export const syncLinkedSheet = async (companyId, kind) => {
   try {
-    await pushToLinkedSheet(companyId, kind);
+    await runSerialized(`${companyId}:${kind}`, () => pushToLinkedSheet(companyId, kind));
   } catch (error) {
     console.warn(`Linked Sheet auto-sync failed (companyId=${companyId}, kind=${kind}):`, error.message);
   }
