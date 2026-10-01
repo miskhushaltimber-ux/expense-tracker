@@ -31,14 +31,16 @@ export const addExpense = async (req, res) => {
     // 24 Sep, per Rishi: "the app itself gets to know what type of payment
     // it is just by reading the master... we put peeling thekedar and the
     // app recongnizes it as new master for the labor section" — a Thekedar
-    // Master typed straight into the Expense Sheet is a Labor Wages payment,
-    // not a generic expense; same signal + auto-create-Contractor logic the
-    // "From Google Sheet"/file import already uses (see
-    // utils/importDestinations.js). Skipped when a vehicle is picked — a
-    // vehicle-tagged row is unambiguous already, and litres/odometer would
-    // have nowhere to go on a Payment.
+    // Master typed straight into the Expense Sheet routes to Labor Wages,
+    // same signal the "From Google Sheet"/file import uses (see
+    // utils/importDestinations.js). 1 Oct: no longer auto-creates a
+    // Contractor named after the Master text — only routes when the
+    // description already names an EXISTING Contractor; otherwise falls
+    // through and saves as a normal expense below. Skipped when a vehicle is
+    // picked — a vehicle-tagged row is unambiguous already, and
+    // litres/odometer would have nowhere to go on a Payment.
     if (!vehicleId) {
-      const routed = await resolveThekedarContractor(master, req.user.companyId);
+      const routed = await resolveThekedarContractor(master, expense, req.user.companyId);
       if (routed) {
         const payment = await createPayment({
           userId: req.user.companyId,

@@ -1,5 +1,5 @@
 import { listVehiclesByUser } from "../models/vehicleStore.js";
-import { listContractorsByUser, createContractor } from "../models/labourStore.js";
+import { listContractorsByUser } from "../models/labourStore.js";
 
 // The Expenses page's importer (file upload or "From Google Sheet") only
 // ever created plain expense rows, with no way to notice a row was actually
@@ -42,26 +42,31 @@ import { listContractorsByUser, createContractor } from "../models/labourStore.j
 // 21 Sep, per Rishi (pasted his real ledger): his sheets DO have a Master
 // column, and for labor rows it's already the strongest signal there is —
 // "Repso Thekedar", "Mill Thekedar", "Pilling Thekedar", "Loading Thekedar",
-// "Bundle Thekedar" — but individual worker names in the expense text
-// ("Sanoj", "Vikas", "Mukesh", ...) essentially never match a saved
-// Contractor, which is why almost nothing was auto-routing. Scoped via
-// AskUserQuestion: Rishi chose to auto-create one Contractor per Thekedar
-// Master category the first time it's seen (e.g. every "Repso Thekedar" row
-// lands under one Contractor named "Repso Thekedar"), rather than requiring
-// every individual worker to be a pre-created Contractor, or requiring the
-// Contractor to already exist before it'll match. A "Kn"/"Mn" mill-unit
-// suffix some Masters carry ("Bundle Thekedar K-2") is stripped before
-// matching/creating, so it collapses onto the same Contractor as the
-// suffix-free form ("Bundle Thekedar") rather than fragmenting into one
-// Contractor per mill unit. Vehicle matching is untouched — Rishi confirmed
-// keeping description-text matching there (equipment names like "Loader",
-// "JCB", "Bike" already appear directly in his expense text).
+// "Bundle Thekedar". Originally (21–24 Sep) a Thekedar Master auto-created a
+// Contractor named after the MASTER TEXT ITSELF the first time it was seen.
+//
+// 1 Oct, found while diagnosing a bad 13–28 Sep import (Rishi: "it messed up
+// the whole thing" — bogus chart bars for "LOADING", "K-2", "THEKEDAR EXP"):
+// that was wrong for Rishi's data. His Masters are process-STAGE labels —
+// "Loading Thekedar" alone covers Tanveer, Deva, Lalan, Sujit...; "Peeling
+// Thekedar" covers Mukesh, Vikas, Babul, Kanna, Dheeraj... — never one
+// specific person. Auto-creating "a Contractor named after the Master" kept
+// producing one fake worker per category that silently absorbed everyone's
+// pay, and once a fake like "K-2" existed, free-text matching below kept
+// re-matching it against any later row whose description merely mentioned
+// "K-2" as a mill-unit tag, snowballing the mess on every later import.
+//
+// Fixed: a Thekedar Master is still the signal that a row is labor-related,
+// but it no longer supplies the contractor's identity or creates anyone. It
+// only routes to Labor Wages if an EXISTING Contractor's real name is
+// already found in the row's own description text (same matching used for
+// everything else below) — otherwise it's left as a plain Expense for Rishi
+// to assign by hand, same as any other unmatched row. Vehicle matching is
+// untouched — equipment names like "Loader", "JCB", "Bike" already appear
+// directly in his expense text.
 const THEKEDAR_RE = /thekedar/i;
-const MILL_UNIT_SUFFIX_RE = /\s+[A-Za-z]-?\d+(?:\/\d+)?$/;
 
 export const isThekedarMaster = (master) => THEKEDAR_RE.test(master || "");
-
-const contractorNameFromMaster = (master) => (master || "").trim().replace(MILL_UNIT_SUFFIX_RE, "").trim();
 
 const normalize = (s) => (s || "").trim().toLowerCase();
 
@@ -118,45 +123,34 @@ const findContractorInText = (contractors, text) => {
   return sorted.find((c) => c.name && containsWhole(text, c.name)) || null;
 };
 
-// Single-row version of the Thekedar-Master auto-routing above (24 Sep, per
+// Single-row version of the Thekedar-Master routing above (24 Sep, per
 // Rishi: "the app itself gets to know what type of payment it is just by
 // reading the master... example in expense sheet we put peeling thekedar
 // and the app recongnizes it as new master for the labor section") — same
-// matching/mill-suffix-stripping/auto-create-Contractor logic as the import
-// path, just usable for ONE row at a time so addExpense (a normal typed-in
-// row on the Expense Sheet, not an import) can reroute it before it's ever
-// saved as a plain expense. Returns null when the master doesn't look like
-// a Thekedar category at all, so the caller's normal expense path runs
-// unchanged.
-export const resolveThekedarContractor = async (master, userId) => {
+// matching as the import path, just usable for ONE row at a time so
+// addExpense (a normal typed-in row on the Expense Sheet, not an import)
+// can reroute it before it's ever saved as a plain expense. Returns null
+// when the master doesn't look like a Thekedar category, OR when it does
+// but no EXISTING Contractor's name is found in the description — either
+// way the caller's normal expense path runs unchanged, same as an
+// unmatched row anywhere else. Never auto-creates (see 1 Oct comment above).
+export const resolveThekedarContractor = async (master, description, userId) => {
   if (!isThekedarMaster(master)) return null;
-  const contractorName = contractorNameFromMaster(master);
-  if (!contractorName) return null;
-
   const contractors = await listContractorsByUser(userId);
-  let contractor = findContractorByColumn(contractors, contractorName);
-  let created = false;
-  if (!contractor) {
-    contractor = await createContractor({ userId, name: contractorName, millId: "" });
-    created = true;
-  }
-  return { contractor, created };
+  const contractor = findContractorInText(contractors, description);
+  if (!contractor) return null;
+  return { contractor, created: false };
 };
 
 export const resolveImportDestinations = async (rows, userId) => {
   // Free-text scanning needs both lists on every import, not just when a
   // dedicated column is present — that's the whole point of this path.
-  // `contractors` is mutated in place below as new ones get auto-created, so
-  // a second "Repso Thekedar" row later in the SAME import reuses the one
-  // just created for the first, instead of creating a duplicate.
+  // Nothing auto-creates anymore (1 Oct), so these lists are read-only here.
   const [vehicles, contractors] = await Promise.all([listVehiclesByUser(userId), listContractorsByUser(userId)]);
 
   const warnings = [];
   let autoMatchedFromText = 0;
-  const autoCreatedContractorNames = [];
 
-  // Sequential, not Promise.all/map — a row that auto-creates a Contractor
-  // must be visible to every later row in this same import before they run.
   const resolvedRows = [];
   for (const row of rows) {
     if (row.vehicleText) {
@@ -186,31 +180,13 @@ export const resolveImportDestinations = async (rows, userId) => {
     }
 
     // No dedicated column — the common case for Rishi's sheets. A Thekedar
-    // Master is the strongest signal available and is checked first; only
-    // if that doesn't apply do we fall back to scanning the description text
-    // for a vehicle or contractor name.
-    if (isThekedarMaster(row.master)) {
-      const contractorName = contractorNameFromMaster(row.master);
-      if (contractorName) {
-        let contractor = findContractorByColumn(contractors, contractorName);
-        if (!contractor) {
-          try {
-            contractor = await createContractor({ userId, name: contractorName, millId: "" });
-            contractors.push(contractor);
-            autoCreatedContractorNames.push(contractorName);
-          } catch (err) {
-            warnings.push(
-              `Row ${row._rowNumber}: couldn't auto-create a Contractor for Master "${row.master}" (${err.message}) — will be saved as a plain expense unless you pick a destination below.`
-            );
-          }
-        }
-        if (contractor) {
-          resolvedRows.push({ ...row, route: "payment", contractorId: contractor.id, contractorName: contractor.name });
-          continue;
-        }
-      }
-    }
-
+    // Master just means "this is labor-related" now (1 Oct — it used to also
+    // supply the contractor's name/auto-create one, which is what produced
+    // fake contractors named after category text like "LOADING"/"K-2"; see
+    // the comment above). The actual routing, Thekedar or not, always comes
+    // from scanning the description text for an EXISTING vehicle/contractor
+    // name below — a Thekedar row that names nobody already on file is left
+    // as a plain expense, same as any other unmatched row.
     const vehicleHit = findVehicleInText(vehicles, row.expense);
     if (vehicleHit) {
       autoMatchedFromText += 1;
@@ -226,15 +202,6 @@ export const resolveImportDestinations = async (rows, userId) => {
     }
 
     resolvedRows.push({ ...row, route: "expense" });
-  }
-
-  if (autoCreatedContractorNames.length > 0) {
-    const unique = [...new Set(autoCreatedContractorNames)];
-    warnings.push(
-      `Created ${unique.length} new Contractor${unique.length === 1 ? "" : "s"} to match your Master categories: ${unique.join(
-        ", "
-      )}. You can assign a mill, mobile number, or opening balance to ${unique.length === 1 ? "it" : "them"} any time on the Manage Data page.`
-    );
   }
 
   if (autoMatchedFromText > 0) {
