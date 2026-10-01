@@ -4,7 +4,7 @@
 // email/token flow to build or secure: the owner sets a name/email/password
 // for the new login and hands it to the employee directly.
 import { findUserByEmail, createUser, listUsersByCompany, deleteUserById } from "../models/userStore.js";
-import { listAuditLogByCompany } from "../utils/auditLog.js";
+import { listAuditLogByCompany, undoAuditEntry } from "../utils/auditLog.js";
 
 const publicTeamMember = (user) => ({
   id: user.id,
@@ -74,5 +74,35 @@ export const getAuditLog = async (req, res) => {
   } catch (error) {
     console.error("Error fetching audit log:", error);
     res.status(500).json({ message: error.message || "Error fetching the activity log" });
+  }
+};
+
+// 30 Sep, per Rishi: "add a feature where deleting that chosen entry" — a
+// bad Labor Wages import trashed his data with no way to fix it except
+// finding the bad rows by hand. Reverses one activity-log entry: deletes
+// what it created, restores what it deleted, or rolls back what it changed.
+// See utils/auditLog.js's undoAuditEntry for exactly what each action type
+// does, and utils/undoRegistry.js for what's excluded (renames that
+// cascade, budgets, contractor merges).
+export const undoAuditEntryHandler = async (req, res) => {
+  try {
+    const result = await undoAuditEntry(req.params.id, req.user.companyId, {
+      actorId: req.user.id,
+      actorName: req.user.name,
+    });
+    if (result.error === "not_found") return res.status(404).json({ message: "That activity entry no longer exists." });
+    if (result.error === "already_undone") return res.status(409).json({ message: "That was already undone." });
+    if (result.error === "not_undoable") return res.status(400).json({ message: "This action can't be undone." });
+    const parts = [];
+    if (result.removed) parts.push(`removed ${result.removed}`);
+    if (result.restored) parts.push(`restored ${result.restored}`);
+    const message = parts.length ? `Undone — ${parts.join(", ")}.` : "Undone.";
+    res.json({
+      message: result.errors.length ? `${message} (${result.errors.length} row(s) couldn't be undone — they may have been changed since.)` : message,
+      ...result,
+    });
+  } catch (error) {
+    console.error("Error undoing activity entry:", error);
+    res.status(500).json({ message: error.message || "Error undoing that action" });
   }
 };

@@ -40,3 +40,17 @@ export const fetchAuditLog = async () => {
     throw new Error(error.response?.data?.message || "Failed to fetch the activity log.");
   }
 };
+
+// 30 Sep, per Rishi: a bad Labor Wages import trashed his contractor data
+// with no way back except finding the bad rows by hand. Reverses one
+// activity-log entry — deletes what it created, restores what it deleted,
+// or rolls back what it changed (only shown for entries the backend marked
+// `undoable`; see backend/utils/auditLog.js).
+export const undoAuditEntry = async (id) => {
+  try {
+    const res = await apiClient.post(`/team/audit-log/${id}/undo`);
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to undo that action.");
+  }
+};

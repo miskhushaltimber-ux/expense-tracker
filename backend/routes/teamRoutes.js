@@ -1,5 +1,5 @@
 import express from "express";
-import { listTeam, createStaffAccount, removeStaff, getAuditLog } from "../controllers/teamController.js";
+import { listTeam, createStaffAccount, removeStaff, getAuditLog, undoAuditEntryHandler } from "../controllers/teamController.js";
 import protect, { requireOwner } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -12,5 +12,6 @@ router.get("/", listTeam);
 router.post("/staff", createStaffAccount);
 router.delete("/staff/:id", removeStaff);
 router.get("/audit-log", getAuditLog);
+router.post("/audit-log/:id/undo", undoAuditEntryHandler);
 
 export default router;

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock, FiDatabase } from "react-icons/fi";
+import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock, FiDatabase, FiRotateCcw } from "react-icons/fi";
 import { downloadBackup } from "../../api/backup";
 import { useAuth } from "../../context/AuthContext";
-import { fetchTeam, createStaff, removeStaff, fetchAuditLog } from "../../api/team";
+import { fetchTeam, createStaff, removeStaff, fetchAuditLog, undoAuditEntry } from "../../api/team";
 
 // Team & Activity (19 Sep, multi-user accounts) — owner-only. Two things
 // live here: who has a login under this account, and a chronological feed
@@ -32,6 +32,16 @@ const roleBadge = (role) =>
 
 const actionVerb = { created: "added", updated: "updated", deleted: "deleted" };
 
+// What clicking Undo will actually do, per action type (30 Sep, per Rishi —
+// see api/team.js's undoAuditEntry comment for the backstory). Shown in the
+// confirm dialog so "Undo" is never a surprise, especially for a whole
+// import/bulk-delete batch at once.
+const undoWarning = {
+  created: (entry) => `This will permanently delete what this action added — ${entry.entityLabel || `this ${entry.entity}`}. This can't be undone again.`,
+  deleted: (entry) => `This will restore what this action deleted — ${entry.entityLabel || `this ${entry.entity}`} — as new row(s) (any attached documents/bills will need re-uploading).`,
+  updated: (entry) => `This will restore the value(s) this action changed on ${entry.entityLabel || `this ${entry.entity}`}, back to what they were before.`,
+};
+
 const formatWhen = (iso) => (iso ? new Date(iso).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "");
 
 const Team = () => {
@@ -45,6 +55,7 @@ const Team = () => {
   const [formError, setFormError] = useState("");
   const [createdCreds, setCreatedCreds] = useState(null);
   const [backingUp, setBackingUp] = useState(false);
+  const [undoingId, setUndoingId] = useState(null);
   const handleBackup = async () => {
     setBackingUp(true);
     try {
@@ -98,6 +109,26 @@ const Team = () => {
       setFormError(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleUndo = async (entry) => {
+    const warning = undoWarning[entry.action]?.(entry) || "This will reverse that action.";
+    if (!window.confirm(`Undo this? ${warning}`)) return;
+    setUndoingId(entry.id);
+    try {
+      const result = await undoAuditEntry(entry.id);
+      // Re-fetch rather than trust a locally-patched row — the entities the
+      // undo touched (Work Log, Payments, Expenses, ...) aren't reloaded on
+      // this page, but the activity feed itself should show it as settled
+      // immediately, and this also picks up entityLabel/undoneAt straight
+      // from the server rather than guessing it client-side.
+      await loadAll();
+      if (result?.errors?.length) alert(result.message);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUndoingId(null);
     }
   };
 
@@ -243,13 +274,29 @@ const Team = () => {
         <div className="divide-y divide-gray-100 dark:divide-gray-800 max-h-[28rem] overflow-y-auto">
           {log.length === 0 && <p className="text-sm text-gray-400 dark:text-gray-500 italic py-2">Nothing logged yet.</p>}
           {log.map((entry) => (
-            <div key={entry.id} className="py-2 text-sm">
-              <span className="font-medium text-gray-800 dark:text-gray-100">{entry.actorName || "Someone"}</span>{" "}
-              <span className="text-gray-500 dark:text-gray-400">
-                {actionVerb[entry.action] || entry.action} a {entry.entity}
-                {entry.entityLabel ? ` — ${entry.entityLabel}` : ""}
-              </span>
-              <div className="text-xs text-gray-400 dark:text-gray-500">{formatWhen(entry.createdAt)}</div>
+            <div key={entry.id} className="py-2 text-sm flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <span className="font-medium text-gray-800 dark:text-gray-100">{entry.actorName || "Someone"}</span>{" "}
+                <span className="text-gray-500 dark:text-gray-400">
+                  {actionVerb[entry.action] || entry.action} a {entry.entity}
+                  {entry.entityLabel ? ` — ${entry.entityLabel}` : ""}
+                </span>
+                <div className="text-xs text-gray-400 dark:text-gray-500">
+                  {formatWhen(entry.createdAt)}
+                  {entry.undoneAt && <span className="text-amber-600 dark:text-amber-400"> · Undone{entry.undoneBy ? ` by ${entry.undoneBy}` : ""}</span>}
+                </div>
+              </div>
+              {entry.undoable && (
+                <button
+                  onClick={() => handleUndo(entry)}
+                  disabled={undoingId === entry.id}
+                  title="Reverse this action"
+                  className="shrink-0 flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-red-600 hover:border-red-300 disabled:opacity-50"
+                >
+                  <FiRotateCcw size={12} />
+                  {undoingId === entry.id ? "Undoing…" : "Undo"}
+                </button>
+              )}
             </div>
           ))}
         </div>

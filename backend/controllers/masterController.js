@@ -28,7 +28,15 @@ export const addMaster = async (req, res) => {
     const { master, error } = await createMaster(req.user.companyId, name);
     if (error === "empty") return res.status(400).json({ message: "A master needs a name." });
     if (error === "duplicate") return res.status(409).json({ message: `"${name.trim()}" is already in the list.` });
-    logAction({ companyId: req.user.companyId, ...actorFields(req), action: "created", entity: "master", entityLabel: master.name });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "created",
+      entity: "master",
+      entityLabel: master.name,
+      entityStore: "masters",
+      entityIds: [master._id],
+    });
     res.status(201).json(master);
   } catch (error) {
     console.error("Error adding master:", error);
@@ -82,7 +90,16 @@ export const removeMaster = async (req, res) => {
     if (error === "not_found") return res.status(404).json({ message: "That master no longer exists." });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to delete this master." });
 
-    logAction({ companyId: req.user.companyId, ...actorFields(req), action: "deleted", entity: "master", entityLabel: master.name });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "deleted",
+      entity: "master",
+      entityLabel: master.name,
+      entityStore: "masters",
+      entityIds: [master._id],
+      snapshot: master,
+    });
     res.json({ message: `"${master.name}" removed`, master });
   } catch (error) {
     console.error("Error deleting master:", error);

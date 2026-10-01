@@ -54,6 +54,8 @@ export const addExpense = async (req, res) => {
           action: "created",
           entity: "payment",
           entityLabel: `${expense} — ₹${amount} (auto-routed from Expense Sheet master "${master}")`,
+          entityStore: "payments",
+          entityIds: [payment._id],
         });
         return res.status(201).json({
           routedTo: "labour-payment",
@@ -87,6 +89,8 @@ export const addExpense = async (req, res) => {
       action: "created",
       entity: "expense",
       entityLabel: `${doc.expense} — ₹${doc.amount}`,
+      entityStore: "expenses",
+      entityIds: [doc._id],
     });
     res.status(201).json(doc);
   } catch (error) {
@@ -161,13 +165,29 @@ export const updateExpense = async (req, res) => {
     if (odometer !== undefined) updates.odometer = odometer;
     if (req.body.customFields !== undefined) updates.customFields = parseCustomFields(req.body.customFields);
 
+    // Undo snapshot — the PRE-update value of every plain field about to
+    // change, fetched before any of updates below get applied. billFile is
+    // deliberately excluded: by the time an update with a new/removed bill
+    // runs, the OLD file is already deleted from Cloudinary (see
+    // deleteStoredFile below), so "undo" restoring that URL would just
+    // point at a dead link — see utils/undoRegistry.js's comment.
+    const existing = (await listExpensesByUser(req.user.companyId)).find((e) => e._id === req.params.id);
+    const before = {};
+    for (const key of Object.keys(updates)) {
+      // customFields is excluded — updateExpenseById MERGES it onto the
+      // row's existing blob rather than replacing it, so restoring the
+      // pre-update snapshot wholesale on undo could clobber a customFields
+      // change made by someone else in between.
+      if (key === "customFields") continue;
+      before[key] = existing?.[key];
+    }
+
     // Two different things can happen to a bill: a new file replaces it, or
     // the user detaches it outright (the × in the Bill column). Both need the
-    // old file cleaned up, so look the row up once and handle either case.
-    // FormData sends booleans as strings, hence the "true" comparison.
+    // old file cleaned up. FormData sends booleans as strings, hence the
+    // "true" comparison.
     const isRemovingBill = removeBill === "true" || removeBill === true;
     if (req.file || isRemovingBill) {
-      const existing = (await listExpensesByUser(req.user.companyId)).find((e) => e._id === req.params.id);
       if (existing?.billFile) await deleteStoredFile(existing.billFile);
       updates.billFile = req.file ? await storeFile(req.file) : "";
     }
@@ -181,6 +201,7 @@ export const updateExpense = async (req, res) => {
       action: "updated",
       entity: "expense",
       entityLabel: `${updated.expense} — ₹${updated.amount}`,
+      ...(Object.keys(before).length ? { entityStore: "expenses", entityIds: [req.params.id], snapshot: before } : {}),
     });
     res.json(updated);
   } catch (error) {
@@ -204,6 +225,9 @@ export const deleteExpense = async (req, res) => {
       action: "deleted",
       entity: "expense",
       entityLabel: `${deleted.expense} — ₹${deleted.amount}`,
+      entityStore: "expenses",
+      entityIds: [deleted._id],
+      snapshot: deleted,
     });
     res.json({ message: "Expense deleted successfully" });
   } catch (error) {
@@ -251,6 +275,9 @@ export const bulkDeleteExpenses = async (req, res) => {
         action: "deleted",
         entity: "expense",
         entityLabel: `${deleted.length} expense${deleted.length === 1 ? "" : "s"} (bulk delete)`,
+        entityStore: "expenses",
+        entityIds: deleted.map((d) => d._id),
+        snapshot: deleted,
       });
     }
 
@@ -298,12 +325,17 @@ export const bulkAddExpenses = async (req, res) => {
   try {
     const saved = toInsert.length ? await bulkCreateExpenses(req.user.companyId, toInsert) : [];
     if (saved.length) {
+      // 30 Sep, per Rishi — a bad import ("it messed up the whole thing")
+      // needs a way back. One entry covers the whole batch; undoing it
+      // deletes every id here, see utils/auditLog.js's undoAuditEntry.
       logAction({
         companyId: req.user.companyId,
         ...actorFields(req),
         action: "created",
         entity: "expense",
         entityLabel: `${saved.length} expense${saved.length === 1 ? "" : "s"} (import)`,
+        entityStore: "expenses",
+        entityIds: saved.map((s) => s._id),
       });
     }
     res.status(201).json({ imported: saved.length, skipped });

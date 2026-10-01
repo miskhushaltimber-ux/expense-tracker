@@ -47,7 +47,15 @@ export const addVehicle = async (req, res) => {
       insuranceFile: await storeFieldFile(req, "insuranceFile"),
       permitFile: await storeFieldFile(req, "permitFile"),
     });
-    logAction({ companyId: req.user.companyId, ...actorFields(req), action: "created", entity: "vehicle", entityLabel: vehicle.name });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "created",
+      entity: "vehicle",
+      entityLabel: vehicle.name,
+      entityStore: "vehicles",
+      entityIds: [vehicle._id],
+    });
     res.status(201).json(vehicle);
   } catch (error) {
     console.error("Error adding vehicle:", error);
@@ -69,6 +77,13 @@ export const updateVehicle = async (req, res) => {
     // that are about to be replaced.
     const existing = (await listVehiclesByUser(req.user.companyId)).find((v) => v._id === req.params.id);
 
+    // Undo snapshot — the PRE-update value of every plain field about to
+    // change. DOC_FIELDS are excluded: their OLD file is deleted from
+    // Cloudinary in the loop right below, so restoring that URL on undo
+    // would just point at a dead link — see utils/undoRegistry.js's comment.
+    const before = {};
+    for (const key of Object.keys(updates)) before[key] = existing?.[key];
+
     for (const field of DOC_FIELDS) {
       const removing = req.body[removeFlagFor(field)] === "true";
       const stored = removing ? undefined : await storeFieldFile(req, field);
@@ -82,7 +97,14 @@ export const updateVehicle = async (req, res) => {
     const { vehicle, error } = await updateVehicleById(req.params.id, req.user.companyId, updates);
     if (error === "not_found") return res.status(404).json({ message: "Vehicle not found" });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to update this vehicle" });
-    logAction({ companyId: req.user.companyId, ...actorFields(req), action: "updated", entity: "vehicle", entityLabel: vehicle.name });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "updated",
+      entity: "vehicle",
+      entityLabel: vehicle.name,
+      ...(Object.keys(before).length ? { entityStore: "vehicles", entityIds: [req.params.id], snapshot: before } : {}),
+    });
     res.json(vehicle);
   } catch (error) {
     console.error("Error updating vehicle:", error);
@@ -98,7 +120,16 @@ export const deleteVehicle = async (req, res) => {
 
     for (const field of DOC_FIELDS) await deleteStoredFile(deleted?.[field]);
 
-    logAction({ companyId: req.user.companyId, ...actorFields(req), action: "deleted", entity: "vehicle", entityLabel: deleted.name });
+    logAction({
+      companyId: req.user.companyId,
+      ...actorFields(req),
+      action: "deleted",
+      entity: "vehicle",
+      entityLabel: deleted.name,
+      entityStore: "vehicles",
+      entityIds: [deleted._id],
+      snapshot: deleted,
+    });
     res.json({ message: "Vehicle deleted successfully" });
   } catch (error) {
     console.error("Error deleting vehicle:", error);
