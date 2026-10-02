@@ -61,26 +61,44 @@ export const pushToLinkedSheet = async (companyId, kind) => {
     await exportExpensesToSheet(sheetUrl, all.filter((e) => e.vehicleId), "Vehicles");
   } else if (kind === "worklog") {
     const [wageEntries, contractors] = await Promise.all([listWageEntriesByUser(companyId), listContractorsByUser(companyId)]);
-    // 25 Sep, per Rishi: "it adds up in the sheets down below but it is not
-    // organised" — this tab used to get written in whatever order the store
-    // returned rows (creation order), same gap the Expenses tab above
-    // already avoided. Sorted by each entry's own date now, oldest first,
-    // so this week's rows land together instead of wherever they happened
-    // to be typed in.
-    const sorted = [...wageEntries].sort((a, b) => parseWorkLogDate(a) - parseWorkLogDate(b));
+    const contractorsById = new Map(contractors.map((c) => [c._id, c]));
+    // 2 Oct, per Rishi: "worklog and payments are not aligned in the sheet
+    // make them align acorrding to the name and date... so we can see both"
+    // — both blocks used to be sorted purely by date, so the same
+    // contractor's rows landed scattered down the sheet instead of grouped
+    // together where the matching Payments block (left) could be scanned
+    // against it. Now grouped by contractor name first — same alphabetical
+    // order on BOTH blocks, since they share this exact comparator shape —
+    // then by date within that contractor. A true row-for-row join isn't
+    // possible (Work Log uses date RANGES, Payments a single date, and the
+    // two rarely have the same count per contractor), so this is the
+    // closest real alignment: scroll to a name and both blocks show that
+    // contractor's activity together.
+    const sorted = [...wageEntries].sort((a, b) => {
+      const nameA = (contractorsById.get(a.contractorId)?.name || "").toLowerCase();
+      const nameB = (contractorsById.get(b.contractorId)?.name || "").toLowerCase();
+      return nameA !== nameB ? nameA.localeCompare(nameB) : parseWorkLogDate(a) - parseWorkLogDate(b);
+    });
     // 25 Sep, per Rishi: "dont keep it seperatly enter both the data in one
     // sheet only right side worklog and leftside payment" — Work Log now
     // lands in the right-hand block (from column F) of the shared
     // "Work Log & Payments" tab instead of its own "Work Log" tab.
-    await exportWorkLogToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), LABOUR_COMBINED_TAB, {
+    await exportWorkLogToSheet(sheetUrl, sorted, contractorsById, LABOUR_COMBINED_TAB, {
       startCol: WORK_LOG_START_COL,
       applyFilter: false,
     });
   } else if (kind === "payments") {
     const [payments, contractors] = await Promise.all([listPaymentsByUser(companyId), listContractorsByUser(companyId)]);
-    const sorted = [...payments].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+    const contractorsById = new Map(contractors.map((c) => [c._id, c]));
+    // Same name-then-date grouping as Work Log above, so both blocks of the
+    // shared tab line up by contractor.
+    const sorted = [...payments].sort((a, b) => {
+      const nameA = (contractorsById.get(a.contractorId)?.name || "").toLowerCase();
+      const nameB = (contractorsById.get(b.contractorId)?.name || "").toLowerCase();
+      return nameA !== nameB ? nameA.localeCompare(nameB) : new Date(a.date || 0) - new Date(b.date || 0);
+    });
     // Left-hand block (column A) of the same shared tab — see comment above.
-    await exportPaymentsToSheet(sheetUrl, sorted, new Map(contractors.map((c) => [c._id, c])), LABOUR_COMBINED_TAB, {
+    await exportPaymentsToSheet(sheetUrl, sorted, contractorsById, LABOUR_COMBINED_TAB, {
       startCol: PAYMENTS_START_COL,
       applyFilter: false,
     });

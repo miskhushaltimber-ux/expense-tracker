@@ -31,7 +31,7 @@ export const getVehicles = async (req, res) => {
 // Owner-only (see routes/vehicleRoutes.js) — vehicles are reference data, not
 // day-to-day entries.
 export const addVehicle = async (req, res) => {
-  const { name, numberPlate, rcExpiry, insuranceExpiry, permitExpiry } = req.body;
+  const { name, type, numberPlate, rcExpiry, insuranceExpiry, permitExpiry } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ message: "Vehicle name is required" });
   }
@@ -39,6 +39,7 @@ export const addVehicle = async (req, res) => {
     const vehicle = await createVehicle({
       userId: req.user.companyId,
       name: name.trim(),
+      type: (type || "").trim(),
       numberPlate,
       rcExpiry,
       insuranceExpiry,
@@ -64,10 +65,11 @@ export const addVehicle = async (req, res) => {
 };
 
 export const updateVehicle = async (req, res) => {
-  const { name, numberPlate, rcExpiry, insuranceExpiry, permitExpiry } = req.body;
+  const { name, type, numberPlate, rcExpiry, insuranceExpiry, permitExpiry } = req.body;
   try {
     const updates = {};
     if (name !== undefined) updates.name = name;
+    if (type !== undefined) updates.type = type;
     if (numberPlate !== undefined) updates.numberPlate = numberPlate;
     if (rcExpiry !== undefined) updates.rcExpiry = rcExpiry;
     if (insuranceExpiry !== undefined) updates.insuranceExpiry = insuranceExpiry;

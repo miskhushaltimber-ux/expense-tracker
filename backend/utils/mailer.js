@@ -226,6 +226,42 @@ export const sendReportEmail = async ({ toEmail, fileName, buffer, count, note, 
     attachment: { name: fileName, content: buffer.toString("base64"), contentType: "text/csv" },
   });
 
+// Monthly report email (2 Oct, per Rishi: "send monthly report to my boss
+// when a new month started and he can see every expense of the month in one
+// report") — the multi-tab workbook from utils/spreadsheetFile.js's
+// buildMonthlyReportWorkbook, with the headline numbers in the email body
+// itself so the boss sees the totals before even opening the attachment.
+export const sendMonthlyReportEmail = async ({ toEmail, companyName, monthLabel, fileName, buffer, summary, note }) => {
+  const money = (n) =>
+    new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n || 0);
+
+  return send({
+    to: toEmail,
+    subject: `${companyName || APP_NAME} — Monthly Report — ${monthLabel}`,
+    html: `
+      <p>Here is the ${monthLabel} report for ${companyName || APP_NAME}.</p>
+      <table style="border-collapse:collapse;margin:8px 0">
+        <tr><td style="padding:3px 16px 3px 0;color:#444">Total paid out</td><td style="padding:3px 0;font-weight:bold">${money(summary.grandTotalPaidOut)}</td></tr>
+        <tr><td style="padding:3px 16px 3px 0;color:#444">Expense Sheet (${summary.expenseCount} ${summary.expenseCount === 1 ? "entry" : "entries"})</td><td style="padding:3px 0">${money(summary.expensesTotal)}</td></tr>
+        <tr><td style="padding:3px 16px 3px 0;color:#444">— of which, Vehicles</td><td style="padding:3px 0">${money(summary.vehicleTotal)}</td></tr>
+        <tr><td style="padding:3px 16px 3px 0;color:#444">Labor Wages paid (${summary.paymentCount} ${summary.paymentCount === 1 ? "entry" : "entries"})</td><td style="padding:3px 0">${money(summary.paymentsTotal)}</td></tr>
+        <tr><td style="padding:3px 16px 3px 0;color:#444">Labor Wages earned (${summary.workLogCount} ${summary.workLogCount === 1 ? "entry" : "entries"})</td><td style="padding:3px 0">${money(summary.workLogTotal)}</td></tr>
+      </table>
+      ${note ? `<p style="white-space:pre-wrap">${note}</p>` : ""}
+      <p style="color:#666;font-size:13px">
+        The attached file has every entry for ${monthLabel} — a Summary tab plus Expenses, Vehicles, Work Log and
+        Payments each on their own sheet. Opens in Excel, or in Google Sheets — from Gmail, click the attachment
+        and choose "Open with Google Sheets".
+      </p>
+    `,
+    attachment: {
+      name: fileName,
+      content: buffer.toString("base64"),
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    },
+  });
+};
+
 // Daily backup email (23 Sep, backup system) — the JSON snapshot from
 // utils/backup.js as an attachment. Keep these emails: each one is a full
 // restorable copy of the account's data as of that day.

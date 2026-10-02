@@ -13,6 +13,12 @@ const HEADERS = [
   "id",
   "userId",
   "name",
+  // 1 Oct, per Rishi: with 2 JCBs and 2 Tractors on file, an expense like
+  // "JCB Diesel" can't auto-match a specific vehicle by name — but a Type
+  // tag (Bike/JCB/Tractor/Car...) lets that generic word auto-route when
+  // exactly ONE vehicle of that type exists (see utils/importDestinations.js
+  // findVehicleByType). Free text, not a fixed list — optional.
+  "type",
   "numberPlate",
   "rcExpiry",
   "insuranceExpiry",
@@ -33,6 +39,7 @@ const toVehicle = (row) => ({
   _id: row.id,
   id: row.id,
   name: row.name,
+  type: row.type || "",
   numberPlate: row.numberPlate,
   rcExpiry: row.rcExpiry || null,
   insuranceExpiry: row.insuranceExpiry || null,
@@ -56,6 +63,7 @@ export const listVehiclesByUser = async (userId) => {
 export const createVehicle = async ({
   userId,
   name,
+  type,
   numberPlate,
   rcExpiry,
   insuranceExpiry,
@@ -70,6 +78,7 @@ export const createVehicle = async ({
     id: crypto.randomUUID(),
     userId,
     name,
+    type: type || "",
     numberPlate: numberPlate || "",
     rcExpiry: rcExpiry || "",
     insuranceExpiry: insuranceExpiry || "",

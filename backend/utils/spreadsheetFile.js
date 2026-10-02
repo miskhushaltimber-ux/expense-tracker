@@ -474,3 +474,171 @@ export const labourFileName = (type) =>
   `${FILE_PREFIX}-${
     type === "payments" ? "payments" : type === "combined" ? "work-log-and-payments" : type === "bill" ? "contractor-bills" : "work-log"
   }-${new Date().toISOString().split("T")[0]}.xlsx`;
+
+// --- Monthly Report (2 Oct, per Rishi: "add an option where i send monthly
+// report to my boss when a new month started and he can see every expense
+// of the month in one report of the data we entered in the app"). Scoped via
+// AskUserQuestion — a manual "send it yourself" button, not an automatic
+// month-start email, and the FULL workbook (every row, one tab per
+// category) rather than a totals-only summary. -----------------------------
+
+// Wage entries carry a free-text date RANGE ("DD-MM-YYYY" or "DD-MM-YYYY TO
+// DD-MM-YYYY"), not a real date field — same format parseWorkLogDateForSort
+// above parses the START of, for sorting. This parses BOTH ends, so
+// reportsController.js can include a batch in a month's report if its range
+// touches that month AT ALL (starts or ends inside it, or spans across it),
+// not only if it happens to start exactly on the 1st.
+export const parseWorkLogDateRange = (dateLabel) => {
+  const parts = String(dateLabel || "").split(" TO ").map((s) => s.trim());
+  const parseOne = (s) => {
+    const [d, m, y] = (s || "").split("-");
+    if (!d || !m || !y) return null;
+    const dt = new Date(Number(y), Number(m) - 1, Number(d));
+    return isNaN(dt.getTime()) ? null : dt;
+  };
+  const start = parseOne(parts[0]);
+  if (!start) return null;
+  const end = parts[1] ? parseOne(parts[1]) : start;
+  return { start, end: end || start };
+};
+
+export const monthlyReportFileName = (monthLabel) =>
+  `${FILE_PREFIX}-monthly-report-${monthLabel}.xlsx`;
+
+// month/monthLabel are display-only here (e.g. "September 2026") — every
+// list passed in must already be filtered to that month by the caller; this
+// only lays the workbook out. Returns { buffer, summary } rather than just
+// the buffer (unlike the builders above) since the caller (the email) needs
+// the computed totals for the message body without recomputing them.
+export const buildMonthlyReportWorkbook = async ({
+  monthLabel,
+  companyName,
+  expenses,
+  vehiclesById = new Map(),
+  wageEntries,
+  payments,
+  contractorsById = new Map(),
+}) => {
+  const workbook = new ExcelJS.Workbook();
+  const generated = `Generated ${new Date().toLocaleDateString("en-IN")}`;
+
+  const vehicleExpenses = expenses.filter((e) => e.vehicleId);
+  const expensesTotal = expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const vehicleTotal = vehicleExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const workLogTotal = wageEntries.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+  const paymentsTotal = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  // Expenses and Payments are two separate collections — a Thekedar-tagged
+  // expense routes straight into Payments instead of Expenses (see
+  // utils/importDestinations.js) — so adding them is the real total cash
+  // out, no double-counting. Work Log is what was EARNED, not necessarily
+  // paid yet, so it's shown on its own line but left out of this sum.
+  const grandTotalPaidOut = expensesTotal + paymentsTotal;
+
+  const summarySheet = addStyledSheet(workbook, {
+    sheetName: "Summary",
+    title: `${companyName || APP_NAME} — Monthly Report`,
+    subtitleParts: [monthLabel, generated],
+    columns: [
+      { header: "Category", key: "category", width: 52 },
+      { header: "Amount (INR)", key: "amount", width: 18, currency: true },
+    ],
+    rows: [
+      { category: "Expense Sheet (every entry, vehicles included)", amount: expensesTotal },
+      { category: "— of which, Vehicle expenses", amount: vehicleTotal },
+      { category: "Labor Wages — Payments made", amount: paymentsTotal },
+      { category: "Labor Wages — Work earned (Work Log; not all of it may be paid yet)", amount: workLogTotal },
+    ],
+  });
+  // A labelled grand-total row below addStyledSheet's own TOTAL row — that
+  // one sums the "Amount" column as printed, which would double-count the
+  // Vehicle sub-line; this is a separate, deliberate sum across categories.
+  const grandRow = summarySheet.getRow(summarySheet.lastRow.number + 1);
+  grandRow.getCell(1).value = "TOTAL PAID OUT THIS MONTH";
+  grandRow.getCell(2).value = grandTotalPaidOut;
+  grandRow.getCell(2).numFmt = CURRENCY_FMT;
+  [1, 2].forEach((c) => {
+    const cell = grandRow.getCell(c);
+    cell.font = { bold: true };
+    cell.border = { ...cellBorder, top: { style: "double", color: { argb: COLORS.border } } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.totalFill } };
+    if (c === 2) cell.alignment = { horizontal: "right" };
+  });
+
+  const toExpenseRow = (e) => ({
+    date: formatDate(e.date),
+    expense: e.expense || "",
+    amount: Number(e.amount) || 0,
+    master: e.master || "",
+    vehicle: e.vehicleId ? vehiclesById.get(e.vehicleId)?.name || "" : "",
+    litres: e.litres ? Number(e.litres) : "",
+    bill: e.billFile || "",
+  });
+  const expenseRows = expenses.map(toExpenseRow);
+  addStyledSheet(workbook, {
+    sheetName: "Expenses",
+    title: `${APP_NAME} — Expense Sheet`,
+    subtitleParts: [monthLabel, `${expenseRows.length} ${expenseRows.length === 1 ? "entry" : "entries"}`, `Total ${inr(expensesTotal)}`],
+    columns: EXPENSE_COLUMNS,
+    rows: expenseRows,
+    totals: { amount: expensesTotal },
+  });
+
+  const vehicleRows = vehicleExpenses.map(toExpenseRow);
+  addStyledSheet(workbook, {
+    sheetName: "Vehicles",
+    title: `${APP_NAME} — Vehicle Expense Sheet`,
+    subtitleParts: [monthLabel, `${vehicleRows.length} ${vehicleRows.length === 1 ? "entry" : "entries"}`, `Total ${inr(vehicleTotal)}`],
+    columns: EXPENSE_COLUMNS,
+    rows: vehicleRows,
+    totals: { amount: vehicleTotal },
+  });
+
+  const workLogRows = [...wageEntries]
+    .sort((a, b) => parseWorkLogDateForSort(a) - parseWorkLogDateForSort(b))
+    .map((w) => ({
+      contractor: contractorsById.get(w.contractorId)?.name || "",
+      date: w.dateLabel || "",
+      cft: Number(w.cft) || 0,
+      rate: Number(w.rate) || 0,
+      amount: Number(w.amount) || 0,
+    }));
+  addStyledSheet(workbook, {
+    sheetName: "Work Log",
+    title: `${APP_NAME} — Labor Wages Work Log`,
+    subtitleParts: [monthLabel, `${workLogRows.length} ${workLogRows.length === 1 ? "entry" : "entries"}`, `Total ${inr(workLogTotal)}`],
+    columns: WORK_LOG_COLUMNS,
+    rows: workLogRows,
+    totals: { amount: workLogTotal },
+  });
+
+  const paymentRows = [...payments]
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map((p) => ({
+      contractor: contractorsById.get(p.contractorId)?.name || "",
+      date: p.date || "",
+      label: p.label || "",
+      amount: Number(p.amount) || 0,
+    }));
+  addStyledSheet(workbook, {
+    sheetName: "Payments",
+    title: `${APP_NAME} — Labor Wages Payments`,
+    subtitleParts: [monthLabel, `${paymentRows.length} ${paymentRows.length === 1 ? "entry" : "entries"}`, `Total ${inr(paymentsTotal)}`],
+    columns: PAYMENT_COLUMNS,
+    rows: paymentRows,
+    totals: { amount: paymentsTotal },
+  });
+
+  return {
+    buffer: await workbookBuffer(workbook),
+    summary: {
+      expensesTotal,
+      vehicleTotal,
+      workLogTotal,
+      paymentsTotal,
+      grandTotalPaidOut,
+      expenseCount: expenseRows.length,
+      workLogCount: workLogRows.length,
+      paymentCount: paymentRows.length,
+    },
+  };
+};

@@ -21,3 +21,15 @@ export const updateLinkedSheet = async (sheetUrl) => {
     throw new Error(error.response?.data?.message || "Couldn't update the linked Sheet");
   }
 };
+
+// 2 Oct — saved default recipient for the Monthly Report card on Team &
+// Activity, so Rishi doesn't retype his boss's email every month.
+// bossEmail: "" (or omitted) clears it. Owner-only on the server.
+export const updateBossEmail = async (bossEmail) => {
+  try {
+    const response = await apiClient.put("/settings/boss-email", { bossEmail });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Couldn't save that email");
+  }
+};

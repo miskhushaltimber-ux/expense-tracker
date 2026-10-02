@@ -87,9 +87,10 @@ const LAST_VEHICLE_DOC_FIELD = VEHICLE_DOC_FIELDS[VEHICLE_DOC_FIELDS.length - 1]
 
 // Column order for Tab/Enter navigation across the vehicle sheet's row —
 // same "type across, it saves" pattern as the main Expense Sheet.
-const VEHICLE_FIELD_ORDER = ["name", "numberPlate", ...VEHICLE_DOC_FIELDS.map((f) => f.expiryField)];
+const VEHICLE_FIELD_ORDER = ["name", "type", "numberPlate", ...VEHICLE_DOC_FIELDS.map((f) => f.expiryField)];
 const emptyVehicleDraft = () => ({
   name: "",
+  type: "",
   numberPlate: "",
   rcExpiry: "",
   insuranceExpiry: "",
@@ -116,6 +117,16 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // suggestion list; typing anything else just works, so the list can grow the
 // same way the Expense Sheet's Masters do.
 const CONTRACTOR_TYPE_PRESETS = ["MILL THEKEDAR", "REPSO THEKEDAR", "BUNDLE THEKEDAR"];
+
+// Vehicle "Type" (1 Oct, per Rishi: "vehicle expensing are not going to
+// vehicles sheet" — "JCB Diesel"/"Tractor Loader Diesel"/"Bike Petrol" never
+// matched a specific registered vehicle like "JCB Loader 1 2DXL-2WD"). A
+// free-typed equipment type, same pattern as the Contractor Master above —
+// import/auto-routing (backend/utils/importDestinations.js findVehicleByType)
+// uses it to auto-match a generic word in the expense text ONLY when exactly
+// one vehicle on file has that type; with 2+ of the same type it's left for
+// Rishi to pick by hand, since the text alone can't say which unit.
+const VEHICLE_TYPE_PRESETS = ["Bike", "Car", "JCB", "Tractor", "Forklift", "Hydra", "Truck"];
 
 // Same "commit only once focus truly leaves the row" fix shipped for the
 // Labor Wages draft rows (18 Sep) — reused here for every draft row on this
@@ -617,6 +628,7 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
       setSaving(true);
       await onAdd({
         name: draft.name.trim(),
+        type: draft.type,
         numberPlate: draft.numberPlate,
         rcExpiry: draft.rcExpiry,
         insuranceExpiry: draft.insuranceExpiry,
@@ -659,6 +671,7 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
     try {
       await onUpdate(id, {
         name: vehicle.name,
+        type: vehicle.type,
         numberPlate: vehicle.numberPlate,
         rcExpiry: vehicle.rcExpiry,
         insuranceExpiry: vehicle.insuranceExpiry,
@@ -778,10 +791,16 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
         </div>
       )}
 
+      <datalist id="vehicle-type-suggestions">
+        {VEHICLE_TYPE_PRESETS.map((v) => (
+          <option key={v} value={v} />
+        ))}
+      </datalist>
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400 text-xs">
             <th className="px-3 py-2 font-medium">Name</th>
+            <th className="px-3 py-2 font-medium" title="Lets a generic word like 'Bike' or 'JCB' in an imported expense auto-match this vehicle, when it's the only one of its type">Type</th>
             <th className="px-3 py-2 font-medium">Number Plate</th>
             {VEHICLE_DOC_FIELDS.map((f) => (
               <th key={f.key} className="px-3 py-2 font-medium">{f.label}</th>
@@ -801,6 +820,19 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
                 onChange={(e) => setDraftField("name", e.target.value)}
                 onKeyDown={(e) => handleCellKeyDown(e, "draft", "name", { isDraft: true })}
                 placeholder="E.g., Truck 1"
+                disabled={saving}
+                className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
+            </td>
+            <td className="px-3 py-2">
+              <input
+                ref={setCellRef("draft", "type")}
+                list="vehicle-type-suggestions"
+                type="text"
+                value={draft.type}
+                onChange={(e) => setDraftField("type", e.target.value)}
+                onKeyDown={(e) => handleCellKeyDown(e, "draft", "type", { isDraft: true })}
+                placeholder="E.g., JCB"
                 disabled={saving}
                 className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-red-400"
               />
@@ -865,14 +897,14 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
 
           {rows.length === 0 && (
             <tr>
-              <td colSpan={2 + VEHICLE_DOC_FIELDS.length + 1} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
+              <td colSpan={3 + VEHICLE_DOC_FIELDS.length + 1} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
                 {readOnly ? "No vehicles yet." : "No vehicles yet — start typing in the row above."}
               </td>
             </tr>
           )}
           {rows.length > 0 && filteredRows.length === 0 && (
             <tr>
-              <td colSpan={2 + VEHICLE_DOC_FIELDS.length + 1} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
+              <td colSpan={3 + VEHICLE_DOC_FIELDS.length + 1} className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500 italic">
                 No vehicles match this filter.
               </td>
             </tr>
@@ -891,6 +923,23 @@ const VehicleManager = ({ vehicles, onAdd, onUpdate, onDelete, readOnly = false 
                     onChange={(e) => updateField(vehicle._id, "name", e.target.value)}
                     onBlur={() => saveRow(vehicle._id)}
                     onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "name", { isDraft: false })}
+                    className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
+                  />
+                </td>
+              )}
+              {readOnly ? (
+                <td className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300">{vehicle.type || "—"}</td>
+              ) : (
+                <td className="px-3 py-2">
+                  <input
+                    ref={setCellRef(vehicle._id, "type")}
+                    list="vehicle-type-suggestions"
+                    type="text"
+                    value={vehicle.type || ""}
+                    onChange={(e) => updateField(vehicle._id, "type", e.target.value)}
+                    onBlur={() => saveRow(vehicle._id)}
+                    onKeyDown={(e) => handleCellKeyDown(e, vehicle._id, "type", { isDraft: false })}
+                    placeholder="E.g., JCB"
                     className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-red-400"
                   />
                 </td>

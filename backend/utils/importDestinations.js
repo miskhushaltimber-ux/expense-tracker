@@ -123,6 +123,38 @@ const findContractorInText = (contractors, text) => {
   return sorted.find((c) => c.name && containsWhole(text, c.name)) || null;
 };
 
+// 1 Oct, per Rishi: his real descriptions name the EQUIPMENT type, not the
+// specific registered vehicle — "JCB Diesel", "Tractor Loader Diesel",
+// "Bike Petrol" — but his Vehicles are registered with specific names like
+// "JCB Loader 1 2DXL-2WD" / "JCB Loader 2 433-4", which never appear
+// verbatim in that short text, so findVehicleInText above never matches
+// them. A vehicle's optional Type tag (Bike/JCB/Tractor/Car/...) fixes this
+// ONLY when it's unambiguous: if exactly one vehicle on file has the type
+// word found in the text, that's a safe auto-match (this is how "Hero
+// Glamour 125" tagged Type "Bike" lets "Bike Petrol" auto-route). With 2
+// JCBs or 2 Tractors on file, the text genuinely doesn't say which one —
+// returns an "ambiguous" result instead of guessing, so the caller can warn
+// Rishi to pick manually rather than silently mis-tagging a specific unit.
+const findVehicleByType = (vehicles, text) => {
+  const byType = new Map();
+  for (const v of vehicles) {
+    const type = normalize(v.type);
+    if (!type || type.length < 3) continue;
+    if (!byType.has(type)) byType.set(type, []);
+    byType.get(type).push(v);
+  }
+  // Longer type words first, so a more specific tag ("Mini Tractor") wins
+  // over a shorter one ("Tractor") when both happen to appear in the text.
+  const types = [...byType.keys()].sort((a, b) => b.length - a.length);
+  for (const type of types) {
+    if (!containsWhole(text, type)) continue;
+    const matches = byType.get(type);
+    if (matches.length === 1) return { vehicle: matches[0] };
+    return { ambiguous: matches };
+  }
+  return null;
+};
+
 // Single-row version of the Thekedar-Master routing above (24 Sep, per
 // Rishi: "the app itself gets to know what type of payment it is just by
 // reading the master... example in expense sheet we put peeling thekedar
@@ -191,6 +223,24 @@ export const resolveImportDestinations = async (rows, userId) => {
     if (vehicleHit) {
       autoMatchedFromText += 1;
       resolvedRows.push({ ...row, route: "vehicle", vehicleId: vehicleHit.id, vehicleName: vehicleHit.name });
+      continue;
+    }
+
+    // Name didn't match — try the equipment Type tag (see findVehicleByType
+    // above). Only acts when exactly one vehicle of that type exists.
+    const typeHit = findVehicleByType(vehicles, row.expense);
+    if (typeHit?.vehicle) {
+      autoMatchedFromText += 1;
+      resolvedRows.push({ ...row, route: "vehicle", vehicleId: typeHit.vehicle.id, vehicleName: typeHit.vehicle.name });
+      continue;
+    }
+    if (typeHit?.ambiguous) {
+      warnings.push(
+        `Row ${row._rowNumber}: "${row.expense}" could be any of ${typeHit.ambiguous.length} vehicles (${typeHit.ambiguous
+          .map((v) => v.name)
+          .join(", ")}) — will be saved as a plain expense unless you pick which one below.`
+      );
+      resolvedRows.push({ ...row, route: "expense" });
       continue;
     }
 

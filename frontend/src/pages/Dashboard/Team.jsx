@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock, FiDatabase, FiRotateCcw } from "react-icons/fi";
+import { FiUserPlus, FiTrash2, FiShield, FiUser, FiClock, FiDatabase, FiRotateCcw, FiMail } from "react-icons/fi";
 import { downloadBackup } from "../../api/backup";
 import { useAuth } from "../../context/AuthContext";
 import { fetchTeam, createStaff, removeStaff, fetchAuditLog, undoAuditEntry } from "../../api/team";
+import MonthlyReportModal from "../../components/MonthlyReportModal";
 
 // Team & Activity (19 Sep, multi-user accounts) — owner-only. Two things
 // live here: who has a login under this account, and a chronological feed
@@ -56,6 +57,7 @@ const Team = () => {
   const [createdCreds, setCreatedCreds] = useState(null);
   const [backingUp, setBackingUp] = useState(false);
   const [undoingId, setUndoingId] = useState(null);
+  const [showMonthlyReport, setShowMonthlyReport] = useState(false);
   const handleBackup = async () => {
     setBackingUp(true);
     try {
@@ -173,6 +175,28 @@ const Team = () => {
           {backingUp ? "Preparing…" : "Download backup"}
         </button>
       </div>
+
+      {/* Monthly Report (2 Oct, per Rishi: "send monthly report to my boss
+          when a new month started and he can see every expense of the month
+          in one report") — a manual button, not automatic. */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+            <FiMail size={15} /> Monthly report
+          </h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Email (or download) one spreadsheet of everything entered for a given month — Expenses, Vehicles, Work Log and Payments.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowMonthlyReport(true)}
+          className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg px-4 py-2"
+        >
+          Send Monthly Report
+        </button>
+      </div>
+
+      {showMonthlyReport && <MonthlyReportModal onClose={() => setShowMonthlyReport(false)} />}
 
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-300 text-sm rounded-lg p-3">

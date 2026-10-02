@@ -2,7 +2,7 @@
 // per Rishi: "add a link google sheet bar in the settings menu where we just
 // link one sheet in it"). Lives in the Navbar's gear-icon dropdown, not its
 // own routed page — see Navbar.jsx.
-import { findCompanyById, setLinkedSheet } from "../models/companyStore.js";
+import { findCompanyById, setLinkedSheet, setBossEmail } from "../models/companyStore.js";
 import { isGoogleSheetsConfigured } from "../utils/googleSheets.js";
 import { pushToLinkedSheet } from "../utils/sheetSync.js";
 
@@ -11,6 +11,7 @@ export const getSettings = async (req, res) => {
     const company = await findCompanyById(req.user.companyId);
     res.json({
       linkedSheetUrl: company?.linkedSheetUrl || "",
+      bossEmail: company?.bossEmail || "",
       sheetsConfigured: isGoogleSheetsConfigured(),
     });
   } catch (error) {
@@ -47,5 +48,19 @@ export const updateLinkedSheet = async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ message: error.message || "Couldn't update the linked Sheet" });
+  }
+};
+
+// Owner-only (see routes/settingsRoutes.js) — just a saved default so the
+// Monthly Report form doesn't need the boss's email retyped every time; an
+// empty value clears it.
+export const updateBossEmail = async (req, res) => {
+  const { bossEmail } = req.body;
+  try {
+    const { company, error } = await setBossEmail(req.user.companyId, bossEmail);
+    if (error === "not_found") return res.status(404).json({ message: "Company not found" });
+    res.json({ bossEmail: company.bossEmail, message: company.bossEmail ? "Saved" : "Cleared" });
+  } catch (error) {
+    res.status(400).json({ message: error.message || "Couldn't save that email" });
   }
 };

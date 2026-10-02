@@ -16,7 +16,12 @@ const SHEET_NAME = "Companies";
 // updates itself in that sheet automatically") — one Google Sheet link per
 // company, set once from the Settings menu. Blank means auto-sync is off;
 // see utils/sheetSync.js for what happens when it's set.
-const HEADERS = ["id", "name", "ownerId", "linkedSheetUrl", "createdAt"];
+//
+// bossEmail (2 Oct, per Rishi: "send monthly report to my boss") — saved
+// once from the Monthly Report card on Team & Activity so he doesn't retype
+// it every month; purely a convenience default, never required (the report
+// form still lets him type/override an address each time).
+const HEADERS = ["id", "name", "ownerId", "linkedSheetUrl", "bossEmail", "createdAt"];
 
 export const ensureCompaniesSheet = () => ensureSheetTab(SHEET_NAME, HEADERS);
 
@@ -25,6 +30,7 @@ const toCompany = (row) => ({
   name: row.name,
   ownerId: row.ownerId,
   linkedSheetUrl: row.linkedSheetUrl || "",
+  bossEmail: row.bossEmail || "",
   createdAt: row.createdAt,
 });
 
@@ -53,6 +59,16 @@ export const setLinkedSheet = async (companyId, sheetUrl) => {
   const row = await findRowById(SHEET_NAME, HEADERS, companyId);
   if (!row) return { error: "not_found" };
   const merged = { ...row, linkedSheetUrl: (sheetUrl || "").trim() };
+  await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
+  return { company: toCompany(merged) };
+};
+
+// 2 Oct — same "paste a new one to replace it, blank clears it" shape as
+// setLinkedSheet above.
+export const setBossEmail = async (companyId, bossEmail) => {
+  const row = await findRowById(SHEET_NAME, HEADERS, companyId);
+  if (!row) return { error: "not_found" };
+  const merged = { ...row, bossEmail: (bossEmail || "").trim() };
   await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
   return { company: toCompany(merged) };
 };

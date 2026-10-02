@@ -1,49 +1,38 @@
 import { apiClient } from "./config";
 
+// Monthly Report (2 Oct, per Rishi: "add an option where i send monthly
+// report to my boss when a new month started and he can see every expense
+// of the month in one report of the data we entered in the app"). A manual
+// button (Team & Activity's "Monthly Report" card) — month: "YYYY-MM".
 const BASE_URL = "/reports";
 
-// Last N months of income/expense/profit, for the dashboard trend chart.
-export const fetchMonthlyTrend = async (months = 6) => {
+export const emailMonthlyReport = async (email, month, note) => {
   try {
-    const response = await apiClient.get(`${BASE_URL}/monthly-trend`, { params: { months } });
+    const response = await apiClient.post(`${BASE_URL}/monthly/email`, { email, month, note });
     return response.data;
   } catch (error) {
-    console.error("Error fetching monthly trend:", error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || "Failed to fetch the monthly trend.");
+    console.error("Error emailing the monthly report:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to send that report.");
   }
 };
 
-// Every transaction still marked "Pending", sorted by due date.
-export const fetchPendingPayments = async () => {
+// Triggers a browser download of the same workbook the email sends — same
+// filename-from-header pattern as api/sheets.js's downloadBlobResponse.
+export const downloadMonthlyReport = async (month) => {
   try {
-    const response = await apiClient.get(`${BASE_URL}/pending-payments`);
-    return response.data;
+    const response = await apiClient.get(`${BASE_URL}/monthly`, { params: { month }, responseType: "blob" });
+    const disposition = response.headers?.["content-disposition"] || "";
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    const fileName = match ? match[1] : `monthly-report-${month}.xlsx`;
+    const url = URL.createObjectURL(response.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   } catch (error) {
-    console.error("Error fetching pending payments:", error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || "Failed to fetch pending payments.");
-  }
-};
-
-// GST collected vs paid. Pass { fy: "2025-2026" } or { month: "2026-09" };
-// omit both for the current calendar month.
-export const fetchGstSummary = async (params = {}) => {
-  try {
-    const response = await apiClient.get(`${BASE_URL}/gst-summary`, { params });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching GST summary:", error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || "Failed to fetch the GST summary.");
-  }
-};
-
-// Full April-March financial year breakdown. Pass fy="2025-2026"; omit for
-// the FY containing today.
-export const fetchFinancialYearSummary = async (fy) => {
-  try {
-    const response = await apiClient.get(`${BASE_URL}/financial-year`, { params: fy ? { fy } : {} });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching financial year summary:", error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || "Failed to fetch the financial year summary.");
+    throw new Error("Couldn't download that report. Please try again.");
   }
 };
